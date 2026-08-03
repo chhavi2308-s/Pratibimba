@@ -1,6 +1,15 @@
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { useApp, DOMAINS, LOCATIONS, getSublocations, DOMAIN_PRAMUKH_DETAILS, AUDIT_AREAS, type AuditPlan } from "../context/app-context";
+import { useEffect } from "react";
+
+import {
+  getAuditPlans,
+  createAuditPlan,
+  updateAuditPlan,
+  deleteAuditPlan,
+  scheduleAudit,
+} from "../services/auditPlanService";
 
 function downloadCSV(plans: AuditPlan[]) {
   const headers = ["Audit ID", "Domain", "Location", "Sublocation", "Audit Planned Date", "Audit Coordinator", "Audit Areas", "Prakalpa Pramukh", "Auditors", "Purpose", "Status", "Created Date"];
@@ -247,7 +256,28 @@ function EditModal({ plan, onClose, onSave, auditors, coordinators, onAddAuditor
 }
 
 export default function AuditPlanPage() {
-  const { auditPlans, currentUser, auditors, coordinatorUsers, addAuditor, createAuditPlan, updateAuditPlan, deleteAuditPlan, scheduleAudit } = useApp();
+  const {
+    currentUser,
+    auditors,
+    coordinatorUsers,
+    addAuditor,
+  } = useApp();
+  const [auditPlans, setAuditPlans] = useState<AuditPlan[]>([]);
+  useEffect(() => {
+    loadAuditPlans();
+  }, []);
+
+  async function loadAuditPlans() {
+    try {
+      const response = await getAuditPlans();
+
+      if (response.success) {
+        setAuditPlans(response.data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
   const coordinatorNames = coordinatorUsers.map((u) => u.name);
   const [scheduleTarget, setScheduleTarget] = useState<AuditPlan | null>(null);
   const [editTarget, setEditTarget] = useState<AuditPlan | null | "new">(null);
@@ -384,12 +414,46 @@ export default function AuditPlanPage() {
         </div>
       )}
 
-      {scheduleTarget && <ScheduleModal plan={scheduleTarget} onClose={() => setScheduleTarget(null)} onSchedule={(data) => { scheduleAudit(scheduleTarget.id, data); setScheduleTarget(null); }} auditors={auditors} />}
+      {scheduleTarget && (
+        <ScheduleModal
+          plan={scheduleTarget}
+          onClose={() => setScheduleTarget(null)}
+          onSchedule={async (data) => {
+            try {
+              await scheduleAudit(scheduleTarget.id, data);
+
+              await loadAuditPlans();
+
+              setScheduleTarget(null);
+            } catch (err) {
+              console.error(err);
+            }
+          }}
+          auditors={auditors}
+        />
+      )}
       {editTarget && (
         <EditModal
           plan={editTarget === "new" ? null : editTarget}
           onClose={() => setEditTarget(null)}
-          onSave={(data) => { if (editTarget === "new") createAuditPlan(data); else updateAuditPlan((editTarget as AuditPlan).id, data); setEditTarget(null); }}
+          onSave={async (data) => {
+            try {
+              if (editTarget === "new") {
+                await createAuditPlan(data);
+              } else {
+              await updateAuditPlan(
+                (editTarget as AuditPlan).id,
+                data
+              );
+            }
+
+            await loadAuditPlans();
+
+            setEditTarget(null);
+          } catch (err) {
+            console.error(err);
+          }
+        }}
           auditors={auditors}
           coordinators={coordinatorNames}
           onAddAuditor={addAuditor}
@@ -404,7 +468,17 @@ export default function AuditPlanPage() {
             <p className="font-body-md text-on-surface-variant">This action cannot be undone.</p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2.5 border border-outline-variant rounded-lg font-label-md">Cancel</button>
-              <button onClick={() => { deleteAuditPlan(deleteConfirm); setDeleteConfirm(null); }} className="flex-1 py-2.5 bg-error text-white rounded-lg font-label-md font-bold">Delete</button>
+              <button onClick={async () => {
+                                try {
+                                  await deleteAuditPlan(deleteConfirm);
+
+                                  await loadAuditPlans();
+
+                                  setDeleteConfirm(null);
+                                } catch (err) {
+                                  console.error(err);
+                                }
+                              }} className="flex-1 py-2.5 bg-error text-white rounded-lg font-label-md font-bold">Delete</button>
             </div>
           </div>
         </div>

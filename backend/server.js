@@ -5,16 +5,18 @@ import helmet from "helmet";
 import morgan from "morgan";
 import compression from "compression";
 import cookieParser from "cookie-parser";
-import roleRoutes from "./routes/roleRoutes.js";
+
 import connectDB from "./config/db.js";
-import domainRoutes from "./routes/domainRoutes.js";
+
 import authRoutes from "./routes/authRoutes.js";
+import roleRoutes from "./routes/roleRoutes.js";
+import domainRoutes from "./routes/domainRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
+import userRoutes from "./routes/userRoutes.js";
+import auditPlanRoutes from "./routes/auditPlanRoutes.js";
+
 import notFound from "./middleware/notFound.js";
 import errorHandler from "./middleware/errorHandler.js";
-import userRoutes from "./routes/userRoutes.js";
-
-
 dotenv.config();
 
 // Connect to MongoDB
@@ -113,6 +115,7 @@ app.use("/api/v1/domains", domainRoutes);
 app.use("/api/v1/locations", locationRoutes);
 
 app.use("/api/v1/users", userRoutes);
+app.use("/api/v1/audit-plans", auditPlanRoutes);
 // ======================
 // Error Handling
 // ======================

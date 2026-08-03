@@ -1,17 +1,71 @@
 import { useState } from "react";
 import { Link } from "wouter";
 
+const API_URL =
+  "https://bug-free-eureka-r4jrjvp4ppjxfwqp5-5000.app.github.dev/api/v1/auth/login";
+
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (
+    e: React.FormEvent<HTMLFormElement>
+  ) => {
     e.preventDefault();
+
     setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
+
+    const formData = new FormData(e.currentTarget);
+
+    const identifier = formData.get("identifier");
+    const password = formData.get("password");
+
+    try {
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identifier,
+          password,
+        }),
+      });
+
+      const data = await response.json();
+
+      console.log("LOGIN RESPONSE:", data);
+
+      if (!response.ok) {
+        alert(data.message || "Login failed");
+        return;
+      }
+
+      // Backend returns { success, message, data: { token, user } }
+
+      localStorage.setItem(
+        "token",
+        data.data.token
+      );
+
+      localStorage.setItem(
+        "user",
+        JSON.stringify(data.data.user)
+      );
+
       window.location.href = "/dashboard";
-    }, 1500);
+    } catch (err) {
+        console.error("LOGIN ERROR:", err);
+
+        if (err instanceof Error) {
+          alert(`ERROR: ${err.message}`);
+        } else {
+          alert(`ERROR: ${JSON.stringify(err)}`);
+        }
+      }
+    finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -25,13 +79,16 @@ export default function LoginPage() {
             height={64}
             className="rounded-lg mb-2 w-16 h-16 object-cover"
           />
+
           <p className="font-label-md text-secondary uppercase tracking-widest font-bold">
             Rashtrotthana Group
           </p>
         </div>
+
         <h1 className="font-display-lg text-on-surface font-bold tracking-tight mb-2">
           Welcome Back
         </h1>
+
         <p className="font-body-md text-on-surface-variant opacity-70">
           Enter your credentials to access the audit portal.
         </p>
@@ -39,13 +96,18 @@ export default function LoginPage() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="space-y-2">
-          <label htmlFor="identifier" className="font-label-md text-on-surface-variant block">
+          <label
+            htmlFor="identifier"
+            className="font-label-md text-on-surface-variant block"
+          >
             Email or Mobile Number
           </label>
+
           <div className="relative group">
             <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px] group-focus-within:text-primary transition-colors">
               person
             </span>
+
             <input
               type="text"
               id="identifier"
@@ -59,17 +121,26 @@ export default function LoginPage() {
 
         <div className="space-y-2">
           <div className="flex justify-between items-center">
-            <label htmlFor="password" className="font-label-md text-on-surface-variant block">
+            <label
+              htmlFor="password"
+              className="font-label-md text-on-surface-variant block"
+            >
               Password
             </label>
-            <Link href="/forgot-password" className="font-label-md text-primary hover:underline transition-all">
+
+            <Link
+              href="/forgot-password"
+              className="font-label-md text-primary hover:underline transition-all"
+            >
               Forgot Password?
             </Link>
           </div>
+
           <div className="relative group">
             <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px] group-focus-within:text-primary transition-colors">
               lock
             </span>
+
             <input
               type={showPassword ? "text" : "password"}
               id="password"
@@ -78,6 +149,7 @@ export default function LoginPage() {
               required
               className="w-full pl-11 pr-11 py-3 rounded-lg border border-gray-200 bg-white focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all font-body-md text-on-surface"
             />
+
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
@@ -96,7 +168,11 @@ export default function LoginPage() {
             id="remember"
             className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
           />
-          <label htmlFor="remember" className="font-body-md text-on-surface-variant select-none cursor-pointer">
+
+          <label
+            htmlFor="remember"
+            className="font-body-md text-on-surface-variant select-none cursor-pointer"
+          >
             Keep me logged in
           </label>
         </div>
@@ -108,10 +184,28 @@ export default function LoginPage() {
         >
           {isLoading ? (
             <>
-              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              <svg
+                className="animate-spin h-5 w-5 text-white"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
               </svg>
+
               Authenticating...
             </>
           ) : (

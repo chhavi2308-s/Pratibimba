@@ -1,5 +1,13 @@
 import { useState } from "react";
 import { useApp, type AppUser, type Role, DOMAINS } from "../context/app-context";
+import { useEffect } from "react";
+
+import {
+  getUsers,
+  createUser,
+  updateUser,
+  deleteUser,
+} from "../services/userService";
 
 const ROLE_OPTIONS: { value: Role; label: string; color: string }[] = [
   { value: "admin",             label: "Admin",             color: "bg-error/10 text-error border-error/20" },
@@ -13,13 +21,29 @@ function roleMeta(role: Role) {
   return ROLE_OPTIONS.find((r) => r.value === role) ?? ROLE_OPTIONS[3];
 }
 
-const emptyForm = (): Omit<AppUser, "id" | "createdDate"> => ({
-  name: "", email: "", role: "auditor", active: true, phone: "", domain: "",
+type UserFormData = {
+  name: string;
+  email: string;
+  password: string;
+  role: Role;
+  active: boolean;
+  phone: string;
+  domain: string;
+};
+
+const emptyForm = (): UserFormData => ({
+  name: "",
+  email: "",
+  password: "",
+  role: "auditor",
+  active: true,
+  phone: "",
+  domain: "",
 });
 
 interface UserFormProps {
-  initial: Omit<AppUser, "id" | "createdDate">;
-  onSave: (data: Omit<AppUser, "id" | "createdDate">) => void;
+  initial: UserFormData;
+  onSave: (data: UserFormData) => void;
   onCancel: () => void;
   isEdit?: boolean;
 }
@@ -28,8 +52,15 @@ function UserForm({ initial, onSave, onCancel, isEdit }: UserFormProps) {
   const [form, setForm] = useState(initial);
   const set = (k: keyof typeof form, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }));
 
-  const valid = form.name.trim() !== "" && form.email.trim() !== "" && form.email.includes("@");
-
+  const valid =
+  form.name.trim() !== "" &&
+  form.email.trim() !== "" &&
+  form.email.includes("@") &&
+  (
+    isEdit ||
+    ((form as any).password &&
+      (form as any).password.length >= 8)
+  );
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
@@ -63,7 +94,21 @@ function UserForm({ initial, onSave, onCancel, isEdit }: UserFormProps) {
               />
             </div>
           </div>
+          {!isEdit && (
+            <div>
+              <label className="font-label-md text-on-surface-variant block mb-1">
+                Password <span className="text-error">*</span>
+              </label>
 
+              <input
+                type="password"
+                value={(form as any).password}
+                onChange={(e) => set("password" as any, e.target.value)}
+                placeholder="Minimum 8 characters"
+                className="w-full border border-outline-variant rounded-lg px-3 py-2.5 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+              />
+            </div>
+          )}
           <div>
             <label className="font-label-md text-on-surface-variant block mb-2">Role <span className="text-error">*</span></label>
             <div className="grid grid-cols-1 gap-2">
@@ -143,13 +188,31 @@ function UserForm({ initial, onSave, onCancel, isEdit }: UserFormProps) {
 }
 
 export default function UserManagement() {
-  const { users, addUser, updateUser, deleteUser, currentUser } = useApp();
+  const { currentUser } = useApp();
+
+  const [users, setUsers] = useState<AppUser[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editUser, setEditUser] = useState<AppUser | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<AppUser | null>(null);
   const [filterRole, setFilterRole] = useState<Role | "all">("all");
   const [search, setSearch] = useState("");
+  useEffect(() => {
+    async function loadUsers() {
+      try {
+        const response = await getUsers();
 
+        if (response.success) {
+          setUsers(response.data);
+        } else {
+          console.error(response.message);
+        }
+      } catch (error) {
+        console.error("Failed to load users:", error);
+      }
+    }
+
+    loadUsers();
+  }, []);
   if (currentUser.role !== "admin") {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-on-surface-variant">
@@ -304,17 +367,40 @@ export default function UserManagement() {
       {/* Add / Edit form modal */}
       {showForm && (
         <UserForm
-          initial={editUser ? { name: editUser.name, email: editUser.email, role: editUser.role, phone: editUser.phone, domain: editUser.domain, active: editUser.active } : emptyForm()}
+          initial={
+            editUser
+              ? {
+                  name: editUser.name,
+                  email: editUser.email,
+                  password: "",
+                  role: editUser.role,
+                  phone: editUser.phone ?? "",
+                  domain: editUser.domain ?? "",
+                  active: editUser.active,
+                }
+              : emptyForm()
+          }
           isEdit={!!editUser}
           onCancel={() => { setShowForm(false); setEditUser(null); }}
-          onSave={(data) => {
-            if (editUser) {
-              updateUser(editUser.id, data);
-            } else {
-              addUser(data);
+          onSave={async (data) => {
+            try {
+              if (editUser) {
+                await updateUser(editUser.id, data);
+              } else {
+                await createUser(data);
+              }
+
+              const response = await getUsers();
+
+              if (response.success) {
+                setUsers(response.data);
+              }
+
+              setShowForm(false);
+              setEditUser(null);
+            } catch (err) {
+              console.error(err);
             }
-            setShowForm(false);
-            setEditUser(null);
           }}
         />
       )}
@@ -339,7 +425,21 @@ export default function UserManagement() {
             <div className="flex gap-3">
               <button onClick={() => setConfirmDelete(null)} className="flex-1 py-2.5 border border-outline-variant rounded-lg font-label-md hover:bg-surface-container-low">Cancel</button>
               <button
-                onClick={() => { deleteUser(confirmDelete.id); setConfirmDelete(null); }}
+                onClick={async () => {
+                  try {
+                    await deleteUser(confirmDelete.id);
+
+                    const response = await getUsers();
+
+                    if (response.success) {
+                      setUsers(response.data);
+                    }
+
+                    setConfirmDelete(null);
+                  } catch (err) {
+                    console.error(err);
+                  }
+                }}
                 className="flex-1 py-2.5 bg-error text-white rounded-lg font-label-md font-bold hover:brightness-110"
               >
                 Remove
