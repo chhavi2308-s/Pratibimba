@@ -14,9 +14,10 @@ import domainRoutes from "./routes/domainRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import auditPlanRoutes from "./routes/auditPlanRoutes.js";
-
+import scheduledAuditRoutes from "./routes/scheduledAudit.routes.js";
 import notFound from "./middleware/notFound.js";
 import errorHandler from "./middleware/errorHandler.js";
+import reportRoutes from "./routes/reportRoutes.js";
 dotenv.config();
 
 // Connect to MongoDB
@@ -113,9 +114,15 @@ app.use("/api/v1/roles", roleRoutes);
 app.use("/api/v1/domains", domainRoutes);
 
 app.use("/api/v1/locations", locationRoutes);
-
 app.use("/api/v1/users", userRoutes);
+
 app.use("/api/v1/audit-plans", auditPlanRoutes);
+
+app.use("/api/v1/scheduled-audits", scheduledAuditRoutes);
+app.use(
+  "/api/v1/reports",
+  reportRoutes
+);
 // ======================
 // Error Handling
 // ======================

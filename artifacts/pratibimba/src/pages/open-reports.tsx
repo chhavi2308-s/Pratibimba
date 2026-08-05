@@ -1,348 +1,658 @@
-import { useState, useMemo } from "react";
-import { useApp, DOMAINS, AUDIT_AREAS, AUDIT_COORDINATORS, type Report } from "../context/app-context";
+import { useState, useMemo, useEffect } from "react";
+import {
+  useApp,
+  DOMAINS,
+  AUDIT_COORDINATORS,
+} from "../context/app-context";
+import {
+  getReports,
+  sendReportEmail,
+  downloadReportPDF,
+  closeReport,
+} from "../services/reportService";
+
+interface Report {
+  _id: string;
+  iqrNumber: string;
+  iqaNumber: string;
+  domain: string;
+  location: string;
+  sublocation: string;
+  auditCoordinator: string;
+  auditors: string[];
+  visitDate: string;
+  visitTime: string;
+  severity: "non_conformance" | "open_for_improvement";
+  findings: string;
+  proofFiles: string[];
+  hasChecklist: boolean;
+  createdAt: string;
+  prakalphaPramukh?: string;
+  auditor?: string;
+  status?: string;
+  dueDate?: string;
+  actionTaken?: string;
+  completionRemarks?: string;
+  closedBy?: string;
+  closedAt?: string;
+}
 
 function downloadCSV(reports: Report[]) {
-  const headers = ["Report ID (IAR)", "Domain", "Location", "Audit Date", "Auditor", "Observations", "Classification", "Coordinator", "Status", "Due Date"];
+  const headers = [
+    "Report ID (IQR)",
+    "IQA Ref",
+    "Domain",
+    "Location",
+    "Sublocation",
+    "Visit Date",
+    "Auditor(s)",
+    "Findings",
+    "Classification",
+    "Coordinator",
+    "Status",
+  ];
   const rows = reports.map((r) => [
-    r.iarNumber, r.domain, r.location || "", r.visitDate, r.auditor,
-    `"${(r.observations || []).map((o, i) => `${i + 1}. ${o.finding}`).join(" | ").replace(/"/g, '""')}"`,
+    r.iqrNumber || "",
+    r.iqaNumber || "",
+    r.domain || "",
+    r.location || "",
+    r.sublocation || "",
+    r.visitDate || "",
+    (r.auditors || [r.auditor || ""]).join("; "),
+    `"${(r.findings || "").replace(/"/g, '""')}"`,
     r.severity === "non_conformance" ? "NC" : "OFI",
-    r.auditCoordinator || "", r.status, r.dueDate || "",
+    r.auditCoordinator || "",
+    r.status || "open",
   ].join(","));
   const csv = [headers.join(","), ...rows].join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a"); a.href = url; a.download = `OpenReports_${new Date().toISOString().split("T")[0]}.csv`; a.click();
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `OpenReports_${new Date().toISOString().split("T")[0]}.csv`;
+  a.click();
   URL.revokeObjectURL(url);
 }
 
-interface DetailModalProps {
-  report: Report;
-  onClose: () => void;
-  canEdit: boolean;
-  onAddCA: (obsId: string, action: string) => void;
-  onCloseObs: (obsId: string) => void;
-  onCloseReport: () => void;
-  canAutoClose: boolean;
-}
-
-function DetailModal({ report, onClose, canEdit, onAddCA, onCloseObs, onCloseReport, canAutoClose }: DetailModalProps) {
-  const { getDaysOpen, isRedFlagged, isOverdue } = useApp();
-  const [editingObs, setEditingObs] = useState<string | null>(null);
-  const [caText, setCaText] = useState<Record<string, string>>({});
-  const days = getDaysOpen(report);
-  const flagged = isRedFlagged(report);
-  const overdue = isOverdue(report);
-
-  const handleCASubmit = (obsId: string) => {
-    const text = caText[obsId]?.trim();
-    if (!text) return;
-    onAddCA(obsId, text);
-    setEditingObs(null);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-floating w-full max-w-3xl z-10 flex flex-col max-h-[92vh]">
-        <div className={`p-6 border-b shrink-0 ${flagged ? "bg-error/5 border-error/20" : "border-outline-variant/10"}`}>
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-3 mb-1 flex-wrap">
-                <span className="font-data-mono text-[14px] text-primary font-black">{report.iarNumber}</span>
-                <span className="font-data-mono text-[11px] text-on-surface-variant">IQA: {report.iqaNumber}</span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-primary/10 text-primary">OPEN</span>
-                {flagged && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-error/10 text-error">🚨 Red Flagged</span>}
-                {overdue && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-error/20 text-error">⚠ Overdue</span>}
-              </div>
-              <p className="font-body-md text-on-surface-variant">{report.domain} — {report.location}{report.sublocation ? `, ${report.sublocation}` : ""}</p>
-            </div>
-            <button onClick={onClose} className="p-1 hover:bg-surface-container rounded-full"><span className="material-symbols-outlined">close</span></button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            {[
-              { label: "Auditor", value: report.auditor },
-              { label: "Coordinator", value: report.auditCoordinator || "—" },
-              { label: "Prakalpa Pramukh", value: report.prakalphaPramukh || "—" },
-              { label: "Audit Date", value: new Date(report.visitDate).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) },
-              { label: "Days Open", value: `${days} days` },
-              { label: "Due Date", value: report.dueDate ? new Date(report.dueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "—" },
-            ].map((item) => (
-              <div key={item.label}>
-                <p className="font-label-md text-on-surface-variant/70 text-[11px]">{item.label}</p>
-                <p className="font-body-md font-semibold text-on-surface mt-0.5">{item.value}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* Observations */}
-          <div>
-            <h4 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-3">
-              Observations ({report.observations?.length || 0})
-            </h4>
-            <div className="space-y-3">
-              {(report.observations || []).map((obs) => (
-                <div key={obs.id} className={`rounded-xl border-2 p-4 ${obs.status === "closed" ? "border-secondary/20 bg-secondary/5" : obs.severity === "non_conformance" ? "border-error/30 bg-error/5" : "border-primary/20 bg-primary/5"}`}>
-                  <div className="flex items-start justify-between gap-3 mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-black ${obs.severity === "non_conformance" ? "bg-error text-white" : "bg-primary text-on-primary"}`}>{obs.number}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${obs.severity === "non_conformance" ? "bg-error/10 text-error" : "bg-primary/10 text-primary"}`}>
-                        {obs.severity === "non_conformance" ? "NC" : "OFI"}
-                      </span>
-                      <span className="font-label-md text-on-surface-variant/70 text-[11px]">{obs.area}</span>
-                    </div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${obs.status === "closed" ? "bg-secondary/10 text-secondary" : "bg-surface-container text-on-surface-variant"}`}>
-                      {obs.status === "closed" ? "Closed" : "Open"}
-                    </span>
-                  </div>
-                  <p className="font-body-md text-on-surface leading-relaxed">{obs.finding}</p>
-                  {obs.correctiveAction ? (
-                    <div className="mt-3 bg-white/70 rounded-lg p-3">
-                      <p className="font-label-md text-secondary/80 text-[11px] uppercase tracking-wider mb-1">Corrective Action</p>
-                      <p className="font-body-md text-on-surface">{obs.correctiveAction}</p>
-                      {obs.status === "open" && canEdit && (
-                        <button onClick={() => onCloseObs(obs.id)} className="mt-2 px-3 py-1.5 bg-secondary text-on-secondary rounded-lg font-label-md font-bold text-[12px]">
-                          Mark Closed
-                        </button>
-                      )}
-                    </div>
-                  ) : canEdit ? (
-                    <div className="mt-3">
-                      {editingObs === obs.id ? (
-                        <div className="space-y-2">
-                          <textarea
-                            value={caText[obs.id] || ""}
-                            onChange={(e) => setCaText((p) => ({ ...p, [obs.id]: e.target.value }))}
-                            rows={3}
-                            placeholder="Describe the corrective action taken..."
-                            className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 outline-none resize-none text-sm"
-                            autoFocus
-                          />
-                          <div className="flex gap-2">
-                            <button onClick={() => setEditingObs(null)} className="px-3 py-1.5 border border-outline-variant rounded-lg font-label-md text-[12px]">Cancel</button>
-                            <button onClick={() => handleCASubmit(obs.id)} disabled={!caText[obs.id]?.trim()} className="px-3 py-1.5 bg-primary text-on-primary rounded-lg font-label-md font-bold text-[12px] disabled:opacity-40">Save</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button onClick={() => { setEditingObs(obs.id); setCaText((p) => ({ ...p, [obs.id]: "" })); }} className="px-3 py-1.5 border-2 border-dashed border-primary/40 text-primary rounded-lg font-label-md text-[12px] hover:bg-primary/5">
-                          + Add Corrective Action
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-[11px] text-on-surface-variant/50 italic">No corrective action yet</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {canEdit && (
-          <div className="p-4 border-t border-outline-variant/10 shrink-0">
-            <button
-              onClick={onCloseReport}
-              disabled={!canAutoClose}
-              title={!canAutoClose ? "Add corrective actions to all observations first" : ""}
-              className={`w-full py-3 rounded-lg font-label-md font-bold transition-all ${canAutoClose ? "bg-secondary text-on-secondary hover:brightness-110" : "bg-surface-container-high text-on-surface-variant cursor-not-allowed"}`}
-            >
-              {canAutoClose ? "Close Report" : `Close Report (${(report.observations || []).filter((o) => !o.correctiveAction.trim()).length} observations need corrective action)`}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function OpenReportsPage() {
-  const { reports, currentUser, getDaysOpen, isRedFlagged, isOverdue, addObservationCorrectiveAction, closeObservation, closeReport, canAutoClose } = useApp();
+  const { currentUser } = useApp();
+  const [reports, setReports] = useState<Report[]>([]);
   const [detailTarget, setDetailTarget] = useState<Report | null>(null);
+
+  // Close Report Form State
+  const [closeTarget, setCloseTarget] = useState<Report | null>(null);
+  const [actionTaken, setActionTaken] = useState("");
+  const [completionRemarks, setCompletionRemarks] = useState("");
+  const [closing, setClosing] = useState(false);
+
+  // In-App Success Modal State
+  const [successOpen, setSuccessOpen] = useState(false);
+  const [lastClosedNumber, setLastClosedNumber] = useState<string>("");
+
   const [filterReportId, setFilterReportId] = useState("");
   const [filterDomain, setFilterDomain] = useState("All");
-  const [filterAuditArea, setFilterAuditArea] = useState("All");
   const [filterClassification, setFilterClassification] = useState("All");
   const [filterCoordinator, setFilterCoordinator] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
   const [search, setSearch] = useState("");
 
-  const isLead = currentUser.role === "lead_auditor";
+  useEffect(() => {
+    loadReports();
+  }, []);
+
+  const loadReports = async () => {
+    try {
+      const data = await getReports();
+      console.log("Open reports loaded:", data);
+      setReports(Array.isArray(data) ? data : data?.data || []);
+    } catch (err) {
+      console.error("Error loading open reports:", err);
+    }
+  };
+
+  const handleViewReport = (report: Report) => {
+    setDetailTarget(report);
+  };
+
+  const handleSendMail = async (report: Report) => {
+    try {
+      await sendReportEmail(report._id);
+      alert(`Email functionality for ${report.iqrNumber} will be connected to backend.`);
+    } catch (error) {
+      console.error("Error sending report email:", error);
+    }
+  };
+
+  const handleDownload = async (report: Report) => {
+    try {
+      await downloadReportPDF(report._id);
+      alert(`PDF download for ${report.iqrNumber} will be connected to backend.`);
+    } catch (error) {
+      console.error("Error downloading report PDF:", error);
+    }
+  };
+
+  const handleOpenCloseDialog = (report: Report) => {
+    setCloseTarget(report);
+    setActionTaken("");
+    setCompletionRemarks("");
+  };
+
+  const handleConfirmCloseReport = async () => {
+    if (!closeTarget || !actionTaken.trim()) return;
+
+    setClosing(true);
+    const iqrNum = closeTarget.iqrNumber;
+
+    try {
+      await closeReport(closeTarget._id, {
+        actionTaken: actionTaken.trim(),
+        completionRemarks: completionRemarks.trim(),
+        closedBy: currentUser.name || "User",
+        closedAt: new Date().toISOString(),
+      });
+
+      setLastClosedNumber(iqrNum);
+      setCloseTarget(null);
+      setDetailTarget(null);
+      setActionTaken("");
+      setCompletionRemarks("");
+
+      await loadReports();
+
+      setSuccessOpen(true);
+    } catch (error) {
+      console.error("Error closing report:", error);
+      alert("Unable to close report. Please try again.");
+    } finally {
+      setClosing(false);
+    }
+  };
+
   const isAuditor = currentUser.role === "auditor";
   const isManager = currentUser.role === "prakalpa_manager";
-  const canEdit = currentUser.role !== "auditor" && currentUser.role !== "admin";
 
-  const openReports = useMemo(() => reports.filter((r) => r.status === "open"), [reports]);
+  // Filter for reports that are open (or missing status field)
+  const openReports = useMemo(() => {
+    return reports.filter(
+      (r) => !r.status || r.status.toLowerCase() === "open"
+    );
+  }, [reports]);
 
   const filtered = useMemo(() => {
     return openReports.filter((r) => {
-      const q = search.toLowerCase();
-      const ms = !q || r.iarNumber.toLowerCase().includes(q) || r.domain.toLowerCase().includes(q) || (r.findings || "").toLowerCase().includes(q);
-      const matchReportId = !filterReportId || r.iarNumber.toLowerCase().includes(filterReportId.toLowerCase());
-      const matchDomain = filterDomain === "All" || r.domain === filterDomain;
-      const matchArea = filterAuditArea === "All" || r.auditArea === filterAuditArea;
-      const matchClass = filterClassification === "All" || (filterClassification === "NC" ? r.severity === "non_conformance" : r.severity === "open_for_improvement");
-      const matchCoord = filterCoordinator === "All" || r.auditCoordinator === filterCoordinator;
-      const matchStatus = filterStatus === "All" || (filterStatus === "Overdue" ? isOverdue(r) : filterStatus === "Flagged" ? isRedFlagged(r) : true);
-      const matchUser = isManager ? r.domain === currentUser.domain : isAuditor ? r.auditor === currentUser.name : true;
-      return ms && matchReportId && matchDomain && matchArea && matchClass && matchCoord && matchStatus && matchUser;
-    });
-  }, [openReports, search, filterReportId, filterDomain, filterAuditArea, filterClassification, filterCoordinator, filterStatus, isOverdue, isRedFlagged, isManager, isAuditor, currentUser]);
+      if (r.status && r.status.toLowerCase() !== "open") {
+        return false;
+      }
 
-  const overdueCount = filtered.filter(isOverdue).length;
-  const flaggedCount = filtered.filter(isRedFlagged).length;
-  const ncCount = filtered.filter((r) => r.severity === "non_conformance").length;
-  const ofiCount = filtered.filter((r) => r.severity === "open_for_improvement").length;
+      const q = search.toLowerCase();
+
+      const ms =
+        !q ||
+        (r.iqrNumber || "").toLowerCase().includes(q) ||
+        (r.iqaNumber || "").toLowerCase().includes(q) ||
+        (r.domain || "").toLowerCase().includes(q) ||
+        (r.findings || "").toLowerCase().includes(q);
+
+      const matchReportId =
+        !filterReportId ||
+        (r.iqrNumber || "")
+          .toLowerCase()
+          .includes(filterReportId.toLowerCase());
+
+      const matchDomain =
+        filterDomain === "All" || r.domain === filterDomain;
+
+      const matchClass =
+        filterClassification === "All" ||
+        (filterClassification === "NC"
+          ? r.severity === "non_conformance"
+          : r.severity === "open_for_improvement");
+
+      const matchCoord =
+        filterCoordinator === "All" ||
+        r.auditCoordinator === filterCoordinator;
+
+      const matchUser = isManager
+        ? r.domain === currentUser.domain
+        : isAuditor
+        ? (r.auditors || []).includes(currentUser.name || "") ||
+          r.auditor === currentUser.name
+        : true;
+
+      return (
+        ms &&
+        matchReportId &&
+        matchDomain &&
+        matchClass &&
+        matchCoord &&
+        matchUser
+      );
+    });
+  }, [
+    openReports,
+    search,
+    filterReportId,
+    filterDomain,
+    filterClassification,
+    filterCoordinator,
+    isManager,
+    isAuditor,
+    currentUser,
+  ]);
+
+  const clearFilters = () => {
+    setSearch("");
+    setFilterReportId("");
+    setFilterDomain("All");
+    setFilterClassification("All");
+    setFilterStatus("All");
+    setFilterCoordinator("All");
+  };
+
+  const ncCount = useMemo(
+    () => filtered.filter((r) => r.severity === "non_conformance").length,
+    [filtered]
+  );
+
+  const ofiCount = useMemo(
+    () => filtered.filter((r) => r.severity === "open_for_improvement").length,
+    [filtered]
+  );
+
+  const redFlaggedCount = useMemo(() => {
+    return filtered.filter((r) => {
+      const days = Math.floor(
+        (Date.now() - new Date(r.createdAt).getTime()) / 86400000
+      );
+      return days > 30;
+    }).length;
+  }, [filtered]);
 
   return (
     <div className="p-8 space-y-6">
       <div className="flex flex-wrap justify-between items-start gap-4">
         <div>
           <h2 className="font-headline-md text-on-surface">Open Reports</h2>
-          <p className="font-body-md text-on-surface-variant mt-0.5">{filtered.length} open reports</p>
+          <p className="font-body-md text-on-surface-variant mt-0.5">
+            {filtered.length} active reports
+            {isManager ? ` — ${currentUser.domain}` : ""}
+          </p>
         </div>
-        <button onClick={() => downloadCSV(filtered)} className="flex items-center gap-2 px-4 py-2.5 border border-outline-variant rounded-lg font-label-md font-medium hover:bg-surface-container-low">
-          <span className="material-symbols-outlined text-[18px]">download</span>
-          Download
-        </button>
+
+        <div className="flex gap-3">
+          <button
+            onClick={loadReports}
+            className="flex items-center gap-2 px-4 py-2.5 border border-outline-variant rounded-lg font-label-md font-medium hover:bg-surface-container-low transition-colors"
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              refresh
+            </span>
+            Refresh
+          </button>
+          <button
+            onClick={() => downloadCSV(filtered)}
+            className="flex items-center gap-2 px-4 py-2.5 border border-outline-variant rounded-lg font-label-md font-medium hover:bg-surface-container-low transition-colors"
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              download
+            </span>
+            Download
+          </button>
+        </div>
       </div>
 
-      {/* Summary Chips */}
-      <div className="flex flex-wrap gap-3">
-        <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg">
-          <span className="font-data-mono font-bold text-primary text-[16px]">{filtered.length}</span>
-          <span className="font-label-md text-primary">Total Open</span>
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white border border-outline-variant/20 rounded-xl p-4 shadow-soft">
+          <p className="text-on-surface-variant text-sm font-label-md">
+            Open Reports
+          </p>
+          <p className="text-3xl font-bold text-primary mt-2 font-data-mono">
+            {filtered.length}
+          </p>
         </div>
-        <div className="flex items-center gap-2 px-4 py-2 bg-error/10 rounded-lg">
-          <span className="font-data-mono font-bold text-error text-[16px]">{ncCount}</span>
-          <span className="font-label-md text-error">NC</span>
+
+        <div className="bg-white border border-outline-variant/20 rounded-xl p-4 shadow-soft">
+          <p className="text-on-surface-variant text-sm font-label-md">
+            High Priority
+          </p>
+          <p className="text-3xl font-bold text-error mt-2 font-data-mono">
+            {redFlaggedCount}
+          </p>
         </div>
-        <div className="flex items-center gap-2 px-4 py-2 bg-secondary/10 rounded-lg">
-          <span className="font-data-mono font-bold text-secondary text-[16px]">{ofiCount}</span>
-          <span className="font-label-md text-secondary">OFI</span>
+
+        <div className="bg-white border border-outline-variant/20 rounded-xl p-4 shadow-soft">
+          <p className="text-on-surface-variant text-sm font-label-md">
+            NC Reports
+          </p>
+          <p className="text-3xl font-bold text-error mt-2 font-data-mono">
+            {ncCount}
+          </p>
         </div>
-        {overdueCount > 0 && (
-          <div className="flex items-center gap-2 px-4 py-2 bg-error/20 rounded-lg">
-            <span className="material-symbols-outlined text-error text-[18px]">warning</span>
-            <span className="font-data-mono font-bold text-error text-[16px]">{overdueCount}</span>
-            <span className="font-label-md text-error">Overdue</span>
-          </div>
-        )}
-        {flaggedCount > 0 && (
-          <div className="flex items-center gap-2 px-4 py-2 bg-error/10 border border-error/30 rounded-lg">
-            <span className="material-symbols-outlined text-error text-[18px]">flag</span>
-            <span className="font-data-mono font-bold text-error text-[16px]">{flaggedCount}</span>
-            <span className="font-label-md text-error">Red Flagged</span>
-          </div>
-        )}
+
+        <div className="bg-white border border-outline-variant/20 rounded-xl p-4 shadow-soft">
+          <p className="text-on-surface-variant text-sm font-label-md">
+            OFI Reports
+          </p>
+          <p className="text-3xl font-bold text-primary mt-2 font-data-mono">
+            {ofiCount}
+          </p>
+        </div>
       </div>
+
+      {/* Warning Banner for >30d open reports */}
+      {redFlaggedCount > 0 && (
+        <div className="bg-error/5 border border-error/30 rounded-xl p-4 flex gap-4 items-center">
+          <span className="material-symbols-outlined text-error text-[24px]">
+            flag
+          </span>
+          <div>
+            <p className="font-bold text-error font-label-md">
+              {redFlaggedCount} report(s) have remained open for more than 30 days.
+            </p>
+            <p className="text-error/70 font-label-md text-sm">
+              Immediate corrective action is recommended.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white p-4 rounded-xl border border-outline-variant/20 shadow-soft flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-[180px]">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">search</span>
-          <input type="text" placeholder="Search open reports..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest" />
+          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">
+            search
+          </span>
+          <input
+            type="text"
+            placeholder="Search open reports..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest"
+          />
         </div>
-        <input type="text" placeholder="Report ID (IAR)" value={filterReportId} onChange={(e) => setFilterReportId(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none w-36" />
+        <input
+          type="text"
+          placeholder="Report ID (IQR)"
+          value={filterReportId}
+          onChange={(e) => setFilterReportId(e.target.value)}
+          className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none w-36"
+        />
         {!isManager && (
-          <select value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
+          <select
+            value={filterDomain}
+            onChange={(e) => setFilterDomain(e.target.value)}
+            className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
+          >
             <option value="All">All Domains</option>
-            {DOMAINS.map((d) => <option key={d}>{d}</option>)}
+            {DOMAINS.map((d) => (
+              <option key={d}>{d}</option>
+            ))}
           </select>
         )}
-        <select value={filterAuditArea} onChange={(e) => setFilterAuditArea(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Areas</option>
-          {AUDIT_AREAS.map((a) => <option key={a}>{a}</option>)}
-        </select>
-        <select value={filterClassification} onChange={(e) => setFilterClassification(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
+        <select
+          value={filterClassification}
+          onChange={(e) => setFilterClassification(e.target.value)}
+          className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
+        >
           <option value="All">All Types</option>
           <option value="NC">NC</option>
           <option value="OFI">OFI</option>
         </select>
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All</option>
-          <option value="Overdue">Overdue</option>
-          <option value="Flagged">Red Flagged</option>
-        </select>
-        <select value={filterCoordinator} onChange={(e) => setFilterCoordinator(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
+        <select
+          value={filterCoordinator}
+          onChange={(e) => setFilterCoordinator(e.target.value)}
+          className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
+        >
           <option value="All">All Coordinators</option>
-          {AUDIT_COORDINATORS.map((c) => <option key={c}>{c}</option>)}
+          {AUDIT_COORDINATORS.map((c) => (
+            <option key={c}>{c}</option>
+          ))}
         </select>
-        {(search || filterReportId || filterDomain !== "All" || filterAuditArea !== "All" || filterClassification !== "All" || filterStatus !== "All" || filterCoordinator !== "All") && (
-          <button onClick={() => { setSearch(""); setFilterReportId(""); setFilterDomain("All"); setFilterAuditArea("All"); setFilterClassification("All"); setFilterStatus("All"); setFilterCoordinator("All"); }} className="font-label-md text-on-surface-variant/60 hover:text-primary">Clear</button>
+        {(search ||
+          filterReportId ||
+          filterDomain !== "All" ||
+          filterClassification !== "All" ||
+          filterStatus !== "All" ||
+          filterCoordinator !== "All") && (
+          <button
+            onClick={clearFilters}
+            className="font-label-md text-on-surface-variant/60 hover:text-primary"
+          >
+            Clear
+          </button>
         )}
       </div>
 
       {/* Table */}
       {filtered.length === 0 ? (
-        <div className="bg-white rounded-xl border border-outline-variant/10 shadow-soft p-16 flex flex-col items-center justify-center gap-4">
-          <span className="material-symbols-outlined text-[48px] text-secondary/40">check_circle</span>
-          <p className="font-headline-sm text-on-surface-variant/40">No open reports found</p>
+        <div className="bg-white rounded-xl border border-outline-variant/10 shadow-soft p-16 flex flex-col items-center justify-center gap-4 text-center">
+          <span className="material-symbols-outlined text-[48px] text-secondary/40">
+            check_circle
+          </span>
+          <p className="font-headline-sm text-on-surface-variant/40">
+            No open reports found
+          </p>
           <p className="font-body-md text-on-surface-variant/30">All clear!</p>
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow-soft border border-outline-variant/10 overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto max-h-[600px]">
             <table className="w-full text-left">
-              <thead className="bg-surface-container-lowest border-b border-outline-variant/20 sticky top-0">
+              <thead className="sticky top-0 z-10 bg-white shadow-sm border-b border-outline-variant/20">
                 <tr>
-                  {["Report ID", "Domain", "Location", "Audit Date", "Auditor", "Obs.", "NC", "OFI", "Type", "Coordinator", "Due Date"].map((h) => (
-                    <th key={h} className="px-3 py-4 font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap text-[11px]">{h}</th>
+                  {[
+                    "Report ID",
+                    "IQA Ref",
+                    "Domain",
+                    "Location",
+                    "Auditor",
+                    "Audit Date",
+                    "Finding",
+                    "NC",
+                    "OFI",
+                    "Status",
+                    "Days Open",
+                    "Actions",
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className="px-4 py-3 font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap text-[11px]"
+                    >
+                      {h}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant/10">
                 {filtered.map((report, idx) => {
-                  const days = getDaysOpen(report);
-                  const flagged = isRedFlagged(report);
-                  const overdue = isOverdue(report);
-                  const ncObs = (report.observations || []).filter((o) => o.severity === "non_conformance").length;
-                  const ofiObs = (report.observations || []).filter((o) => o.severity === "open_for_improvement").length;
-                  const openObs = (report.observations || []).filter((o) => o.status === "open").length;
+                  const days = Math.floor(
+                    (Date.now() - new Date(report.createdAt).getTime()) /
+                      86400000
+                  );
+
+                  const ncObs = report.severity === "non_conformance" ? 1 : 0;
+                  const ofiObs =
+                    report.severity === "open_for_improvement" ? 1 : 0;
+
+                  const assignedAuditors =
+                    report.auditors && report.auditors.length > 0
+                      ? report.auditors.join(", ")
+                      : report.auditor || "—";
+
                   return (
                     <tr
-                      key={report.id}
-                      onClick={() => setDetailTarget(report)}
-                      className={`transition-colors cursor-pointer ${flagged ? "bg-error/5 hover:bg-error/10" : overdue ? "bg-orange-50 hover:bg-orange-100/50" : idx % 2 === 1 ? "bg-surface-container-lowest/50 hover:bg-surface-container-low" : "hover:bg-surface-container-low"}`}
+                      key={report._id || idx}
+                      className={`
+                        transition-all
+                        duration-200
+                        cursor-pointer
+                        hover:bg-surface-container-low
+                        hover:shadow-md
+                        ${
+                          days > 30
+                            ? "bg-error/5"
+                            : idx % 2 === 1
+                            ? "bg-surface-container-lowest/50"
+                            : ""
+                        }
+                      `}
+                      onClick={() => handleViewReport(report)}
                     >
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-1.5">
-                          {flagged && <span className="material-symbols-outlined text-error text-[14px]">flag</span>}
-                          {overdue && !flagged && <span className="material-symbols-outlined text-orange-500 text-[14px]">warning</span>}
-                          <span className="font-data-mono text-[12px] text-primary font-bold">{report.iarNumber}</span>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          {days > 30 && (
+                            <span
+                              className="material-symbols-outlined text-error text-[16px]"
+                              title="Open for more than 30 days"
+                            >
+                              flag
+                            </span>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleViewReport(report);
+                            }}
+                            className="font-data-mono text-primary font-bold text-[12px] hover:underline text-left"
+                          >
+                            {report.iqrNumber}
+                          </button>
                         </div>
-                        <p className="font-data-mono text-[10px] text-on-surface-variant/60 mt-0.5">{days}d open</p>
                       </td>
-                      <td className="px-3 py-3">
-                        <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full text-[10px] font-bold whitespace-nowrap">{report.domain}</span>
+                      <td className="px-4 py-3 font-data-mono text-[11px] text-on-surface-variant">
+                        {report.iqaNumber || "—"}
                       </td>
-                      <td className="px-3 py-3 font-body-md text-on-surface-variant whitespace-nowrap text-[12px]">{report.location || "—"}</td>
-                      <td className="px-3 py-3 font-data-mono text-[11px] whitespace-nowrap">{new Date(report.visitDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</td>
-                      <td className="px-3 py-3 font-body-md text-on-surface-variant text-[12px] whitespace-nowrap">{report.auditor}</td>
-                      <td className="px-3 py-3 text-center">
-                        <span className={`font-data-mono font-bold text-[13px] ${openObs > 0 ? "text-primary" : "text-on-surface-variant/30"}`}>{report.observations?.length || 0}</span>
-                        {openObs > 0 && <span className="font-label-md text-[10px] text-on-surface-variant/60 block">{openObs} open</span>}
-                      </td>
-                      <td className="px-3 py-3 text-center font-data-mono font-bold text-[13px]">
-                        {ncObs > 0 ? <span className="text-error">{ncObs}</span> : <span className="text-on-surface-variant/30">—</span>}
-                      </td>
-                      <td className="px-3 py-3 text-center font-data-mono font-bold text-[13px]">
-                        {ofiObs > 0 ? <span className="text-primary">{ofiObs}</span> : <span className="text-on-surface-variant/30">—</span>}
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${report.severity === "non_conformance" ? "bg-error/10 text-error" : "bg-primary/10 text-primary"}`}>
-                          {report.severity === "non_conformance" ? "NC" : "OFI"}
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-primary/10 text-primary font-bold text-[10px] tracking-wide whitespace-nowrap">
+                          {report.domain}
                         </span>
                       </td>
-                      <td className="px-3 py-3 font-body-md text-on-surface-variant whitespace-nowrap text-[12px]">{report.auditCoordinator || "—"}</td>
-                      <td className="px-3 py-3 font-data-mono text-[11px] whitespace-nowrap">
-                        {report.dueDate ? (
-                          <span className={overdue ? "text-error font-bold" : "text-on-surface-variant"}>
-                            {new Date(report.dueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
-                            {overdue && " ⚠"}
+                      <td className="px-4 py-3 font-body-md text-on-surface-variant text-[12px] whitespace-nowrap">
+                        {report.location || "—"}
+                      </td>
+                      <td className="px-4 py-3 font-body-md text-on-surface-variant text-[12px] whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-[17px] text-secondary">
+                            badge
                           </span>
-                        ) : "—"}
+                          <span>{assignedAuditors}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-data-mono text-[11px] whitespace-nowrap">
+                        {report.visitDate
+                          ? new Date(report.visitDate).toLocaleDateString(
+                              "en-IN",
+                              { day: "2-digit", month: "short", year: "numeric" }
+                            )
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3 max-w-[240px]">
+                        <p className="font-body-md text-[12px] text-on-surface truncate">
+                          {report.findings}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-center font-data-mono font-bold text-[13px]">
+                        {ncObs > 0 ? (
+                          <span className="px-2 py-1 rounded-full bg-error/10 text-error font-bold text-[10px]">
+                            NC
+                          </span>
+                        ) : (
+                          <span className="text-on-surface-variant/30">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center font-data-mono font-bold text-[13px]">
+                        {ofiObs > 0 ? (
+                          <span className="px-2 py-1 rounded-full bg-primary/10 text-primary font-bold text-[10px]">
+                            OFI
+                          </span>
+                        ) : (
+                          <span className="text-on-surface-variant/30">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                            (report.status ?? "open") === "open"
+                              ? "bg-primary/10 text-primary"
+                              : "bg-secondary/10 text-secondary"
+                          }`}
+                        >
+                          {report.status ?? "open"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`font-data-mono text-[12px] ${
+                            days > 30
+                              ? "text-error font-bold"
+                              : days > 14
+                              ? "text-error/60"
+                              : "text-on-surface-variant"
+                          }`}
+                        >
+                          {days}d
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1">
+                          {/* Primary Action: Close Report */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenCloseDialog(report);
+                            }}
+                            className="p-2 rounded-lg transition-all hover:scale-110 hover:bg-error/10 text-error"
+                            title="Close Report"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              task_alt
+                            </span>
+                          </button>
+
+                          {/* View */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleViewReport(report);
+                            }}
+                            className="p-2 rounded-lg transition-all hover:scale-110 hover:bg-primary/10 text-primary"
+                            title="View Report Details"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              open_in_new
+                            </span>
+                          </button>
+
+                          {/* Mail */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSendMail(report);
+                            }}
+                            className="p-2 rounded-lg transition-all hover:scale-110 hover:bg-secondary/10 text-secondary"
+                            title="Send Report Email"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              mail
+                            </span>
+                          </button>
+
+                          {/* Download */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDownload(report);
+                            }}
+                            className="p-2 rounded-lg transition-all hover:scale-110 hover:bg-primary/10 text-primary"
+                            title="Download PDF"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              download
+                            </span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -351,40 +661,406 @@ export default function OpenReportsPage() {
             </table>
           </div>
           <div className="p-4 border-t border-outline-variant/10 flex justify-between items-center font-label-md text-on-surface-variant flex-wrap gap-2">
-            <span>Showing {filtered.length} of {openReports.length} open reports</span>
+            <span>
+              Showing <strong>{filtered.length}</strong> of{" "}
+              <strong>{openReports.length}</strong> open reports
+            </span>
             <div className="flex gap-3 text-[12px]">
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-error/60" />NC: {ncCount}</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-primary/40" />OFI: {ofiCount}</span>
-              {overdueCount > 0 && <span className="flex items-center gap-1 text-error"><span className="w-2 h-2 rounded-full bg-orange-400" />Overdue: {overdueCount}</span>}
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-error/60" />
+                NC: {ncCount}
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-primary/40" />
+                OFI: {ofiCount}
+              </span>
             </div>
           </div>
         </div>
       )}
 
+      {/* Enterprise Open Report Detail Modal */}
       {detailTarget && (
-        <DetailModal
-          report={detailTarget}
-          onClose={() => setDetailTarget(null)}
-          canEdit={canEdit}
-          canAutoClose={canAutoClose(detailTarget)}
-          onAddCA={(obsId, action) => {
-            addObservationCorrectiveAction(detailTarget.id, obsId, action);
-            setDetailTarget((prev) => prev ? { ...prev, observations: prev.observations.map((o) => o.id === obsId ? { ...o, correctiveAction: action } : o) } : null);
-          }}
-          onCloseObs={(obsId) => {
-            closeObservation(detailTarget.id, obsId);
-            setDetailTarget((prev) => {
-              if (!prev) return null;
-              const observations = prev.observations.map((o) => o.id === obsId ? { ...o, status: "closed" as const, dateClosed: new Date().toISOString().split("T")[0] } : o);
-              const allClosed = observations.every((o) => o.status === "closed");
-              return { ...prev, observations, status: allClosed ? "closed" as const : prev.status };
-            });
-          }}
-          onCloseReport={() => {
-            closeReport(detailTarget.id);
-            setDetailTarget(null);
-          }}
-        />
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setDetailTarget(null)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-floating w-full max-w-3xl z-10 flex flex-col max-h-[92vh] overflow-hidden">
+            {/* Header */}
+            <div className="p-6 border-b border-outline-variant/10 shrink-0">
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <h2 className="font-headline-md text-on-surface">
+                      {detailTarget.iqrNumber}
+                    </h2>
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase bg-primary/10 text-primary">
+                      {detailTarget.status ?? "OPEN"}
+                    </span>
+                  </div>
+                  <p className="text-sm text-on-surface-variant mt-1 font-body-md">
+                    IQA Reference : {detailTarget.iqaNumber}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setDetailTarget(null)}
+                  className="p-2 rounded-full hover:bg-surface-container transition-colors"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-6 flex-1">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
+                <div>
+                  <p className="text-xs text-on-surface-variant">IQR Number</p>
+                  <p className="font-semibold text-on-surface font-data-mono">
+                    {detailTarget.iqrNumber}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant">IQA Reference</p>
+                  <p className="font-semibold text-on-surface font-data-mono">
+                    {detailTarget.iqaNumber}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant">Domain</p>
+                  <p className="font-semibold text-on-surface">
+                    {detailTarget.domain}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant mb-1">Location</p>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-primary">
+                      location_on
+                    </span>
+                    <p className="font-semibold text-on-surface">
+                      {detailTarget.location}
+                      {detailTarget.sublocation
+                        ? `, ${detailTarget.sublocation}`
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant mb-1">Coordinator</p>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-secondary">
+                      person
+                    </span>
+                    <p className="font-semibold text-on-surface">
+                      {detailTarget.auditCoordinator || "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant mb-1">Auditors</p>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-primary">
+                      badge
+                    </span>
+                    <p className="font-semibold text-on-surface">
+                      {detailTarget.auditors?.join(", ") ||
+                        detailTarget.auditor ||
+                        "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant mb-1">Visit Date</p>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-primary">
+                      calendar_today
+                    </span>
+                    <p className="font-semibold text-on-surface">
+                      {detailTarget.visitDate
+                        ? new Date(detailTarget.visitDate).toLocaleDateString("en-IN")
+                        : "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant mb-1">Visit Time</p>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[18px] text-primary">
+                      schedule
+                    </span>
+                    <p className="font-semibold text-on-surface">
+                      {detailTarget.visitTime || "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-on-surface-variant mb-1">Classification</p>
+                  <span
+                    className={`inline-flex items-center px-3 py-1 rounded-full font-bold text-xs ${
+                      detailTarget.severity === "non_conformance"
+                        ? "bg-error/10 text-error"
+                        : "bg-primary/10 text-primary"
+                    }`}
+                  >
+                    {detailTarget.severity === "non_conformance"
+                      ? "🚩 Non-Conformance"
+                      : "Open For Improvement"}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <p className="font-semibold text-on-surface mb-2">Audit Findings</p>
+                <div className="rounded-xl border border-primary/10 bg-primary/5 p-5 shadow-sm whitespace-pre-wrap leading-relaxed font-body-md text-on-surface">
+                  {detailTarget.findings || "No findings recorded."}
+                </div>
+              </div>
+
+              {/* Corrective Action Details if present */}
+              {detailTarget.actionTaken && (
+                <div>
+                  <p className="font-semibold text-on-surface mb-2">
+                    Corrective Action Taken
+                  </p>
+                  <div className="rounded-xl border border-secondary/20 bg-secondary/5 p-5 whitespace-pre-wrap font-body-md text-on-surface leading-relaxed">
+                    {detailTarget.actionTaken}
+                  </div>
+                </div>
+              )}
+
+              {detailTarget.completionRemarks && (
+                <div>
+                  <p className="font-semibold text-on-surface mb-2">
+                    Completion Remarks
+                  </p>
+                  <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 whitespace-pre-wrap font-body-md text-on-surface leading-relaxed">
+                    {detailTarget.completionRemarks}
+                  </div>
+                </div>
+              )}
+
+              {detailTarget.closedBy && (
+                <div className="grid grid-cols-2 gap-4 pt-2">
+                  <div>
+                    <p className="text-xs text-on-surface-variant">Closed By</p>
+                    <p className="font-semibold text-on-surface">{detailTarget.closedBy}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-on-surface-variant">Closed On</p>
+                    <p className="font-semibold text-on-surface">
+                      {detailTarget.closedAt
+                        ? new Date(detailTarget.closedAt).toLocaleString("en-IN")
+                        : "—"}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Evidence Files Section */}
+              {detailTarget.proofFiles && detailTarget.proofFiles.length > 0 && (
+                <div>
+                  <p className="font-semibold text-on-surface mb-2">Evidence Files</p>
+                  <div className="flex flex-wrap gap-2">
+                    {detailTarget.proofFiles.map((file) => (
+                      <div
+                        key={file}
+                        className="px-3 py-2 rounded-lg border border-secondary/20 bg-secondary/5 text-secondary text-sm flex items-center gap-2 font-label-md"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">
+                          attach_file
+                        </span>
+                        {file}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-outline-variant/10 shrink-0 flex justify-between items-center">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleSendMail(detailTarget)}
+                  className="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low transition-colors flex items-center gap-1.5"
+                  title="Send Email"
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    mail
+                  </span>
+                </button>
+                <button
+                  onClick={() => handleDownload(detailTarget)}
+                  className="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low transition-colors flex items-center gap-1.5"
+                  title="Download PDF"
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    download
+                  </span>
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                {detailTarget.status !== "closed" && (
+                  <button
+                    onClick={() => handleOpenCloseDialog(detailTarget)}
+                    className="px-5 py-2 bg-error text-white rounded-lg font-bold hover:brightness-110 transition-all font-label-md"
+                  >
+                    Close Report
+                  </button>
+                )}
+                <button
+                  onClick={() => setDetailTarget(null)}
+                  className="px-5 py-2 bg-primary text-on-primary rounded-lg font-bold hover:brightness-110 transition-all font-label-md"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive 2-Step Close Report Form Dialog */}
+      {closeTarget && (
+        <div className="fixed inset-0 flex items-center justify-center z-[60] p-4">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setCloseTarget(null)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-floating w-full max-w-lg z-10 p-6 space-y-4">
+            <div className="border-b border-outline-variant/10 pb-3">
+              <h3 className="font-headline-sm text-on-surface">
+                Close Report — {closeTarget.iqrNumber}
+              </h3>
+              <p className="text-xs text-on-surface-variant mt-1 font-body-md">
+                Please enter the corrective action details to complete report closure.
+              </p>
+            </div>
+
+            {/* Audit Finding Card */}
+            <div className="rounded-lg bg-surface-container-low p-3 border border-outline-variant/20">
+              <p className="text-xs font-semibold text-on-surface mb-1 font-label-md">
+                Audit Finding
+              </p>
+              <p className="text-sm whitespace-pre-wrap font-body-md text-on-surface-variant leading-relaxed">
+                {closeTarget.findings}
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-label-md text-on-surface-variant mb-1 font-semibold">
+                  Action Taken *
+                </label>
+                <textarea
+                  value={actionTaken}
+                  onChange={(e) => setActionTaken(e.target.value)}
+                  placeholder="Describe the corrective action taken to address finding..."
+                  rows={3}
+                  className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none text-sm resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-label-md text-on-surface-variant mb-1 font-semibold">
+                  Completion Remarks (Optional)
+                </label>
+                <textarea
+                  value={completionRemarks}
+                  onChange={(e) => setCompletionRemarks(e.target.value)}
+                  placeholder="Additional observations or verification remarks..."
+                  rows={2}
+                  className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none text-sm resize-none"
+                />
+              </div>
+            </div>
+
+            {/* Confirmation Banner */}
+            <div className="rounded-lg border border-error/20 bg-error/5 p-3">
+              <div className="flex gap-2.5 items-start">
+                <span className="material-symbols-outlined text-error text-[20px] mt-0.5">
+                  warning
+                </span>
+                <div>
+                  <p className="font-semibold text-error text-xs font-label-md">
+                    Confirm Report Closure
+                  </p>
+                  <p className="text-[11px] text-on-surface-variant mt-0.5 leading-normal font-body-md">
+                    Once confirmed, this report will be marked as closed, removed from Open Reports, and the corrective action will become part of the permanent audit record.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-outline-variant/10">
+              <button
+                type="button"
+                onClick={() => setCloseTarget(null)}
+                className="px-4 py-2 border border-outline-variant rounded-lg font-label-md hover:bg-surface-container-low transition-colors text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!actionTaken.trim() || closing}
+                onClick={handleConfirmCloseReport}
+                className="px-5 py-2 rounded-lg bg-error text-white font-bold hover:brightness-110 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm flex items-center gap-2 font-label-md"
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  task_alt
+                </span>
+                {closing ? "Closing..." : "Confirm Closure"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enterprise In-App Success Overlay */}
+      {successOpen && (
+        <div className="fixed inset-0 flex items-center justify-center z-[70] p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setSuccessOpen(false)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-floating p-8 w-full max-w-md text-center z-10 animate-fade-in">
+            <div className="flex justify-center mb-4">
+              <div className="w-16 h-16 rounded-full bg-secondary/10 flex items-center justify-center">
+                <span className="material-symbols-outlined text-secondary text-[36px] filled">
+                  task_alt
+                </span>
+              </div>
+            </div>
+
+            <h3 className="font-headline-sm text-on-surface mb-2">
+              Report Closed Successfully
+            </h3>
+
+            <p className="text-on-surface-variant text-sm font-body-md mb-6 leading-relaxed">
+              {lastClosedNumber ? `${lastClosedNumber} has been closed. ` : ""}
+              The report has been marked as closed and moved to All Reports.
+            </p>
+
+            <button
+              className="w-full py-2.5 bg-primary text-on-primary rounded-lg font-bold font-label-md hover:brightness-110 transition-all"
+              onClick={() => setSuccessOpen(false)}
+            >
+              Done
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

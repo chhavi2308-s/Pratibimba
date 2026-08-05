@@ -1,0 +1,130 @@
+import mongoose from "mongoose";
+
+const reportSchema = new mongoose.Schema(
+  {
+    iqrNumber: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+
+    auditPlan: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AuditPlan",
+      required: true,
+    },
+
+    scheduledAudit: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ScheduledAudit",
+      required: true,
+    },
+
+    iqaNumber: {
+      type: String,
+      required: true,
+    },
+
+    prakalpa: {
+      type: String,
+      default: "",
+    },
+
+    domain: {
+      type: String,
+      required: true,
+    },
+
+    location: {
+      type: String,
+      required: true,
+    },
+
+    sublocation: {
+      type: String,
+      default: "",
+    },
+
+    auditCoordinator: {
+      type: String,
+      default: "",
+    },
+
+    auditors: {
+      type: [String],
+      default: [],
+    },
+
+    visitDate: {
+      type: Date,
+      required: true,
+    },
+
+    visitTime: {
+      type: String,
+      required: true,
+    },
+
+    severity: {
+      type: String,
+      enum: [
+        "open_for_improvement",
+        "non_conformance",
+      ],
+      required: true,
+    },
+
+    findings: {
+      type: String,
+      required: true,
+    },
+
+    proofFiles: {
+      type: [String],
+      default: [],
+    },
+
+    hasChecklist: {
+      type: Boolean,
+      default: false,
+    },
+
+    // =========================
+    // Report Lifecycle
+    // =========================
+
+    status: {
+      type: String,
+      enum: ["open", "closed"],
+      default: "open",
+    },
+
+    actionTaken: {
+      type: String,
+      default: "",
+    },
+
+    completionRemarks: {
+      type: String,
+      default: "",
+    },
+
+    closedBy: {
+      type: String,
+      default: "",
+    },
+
+    closedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+export default mongoose.model(
+  "Report",
+  reportSchema
+);

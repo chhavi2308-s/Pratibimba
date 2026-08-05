@@ -19,7 +19,6 @@ async function handleResponse(res: Response) {
 
   return data;
 }
-
 export async function getAuditPlans() {
   const res = await fetch(BASE_URL, {
     headers: authHeaders(),
@@ -35,7 +34,8 @@ export async function createAuditPlan(data: any) {
     body: JSON.stringify(data),
   });
 
-  return handleResponse(res);
+  const response = await handleResponse(res);
+  return response.data;
 }
 
 export async function updateAuditPlan(id: string, data: any) {
@@ -45,7 +45,8 @@ export async function updateAuditPlan(id: string, data: any) {
     body: JSON.stringify(data),
   });
 
-  return handleResponse(res);
+  const response = await handleResponse(res);
+  return response.data;
 }
 
 export async function deleteAuditPlan(id: string) {
@@ -54,7 +55,8 @@ export async function deleteAuditPlan(id: string) {
     headers: authHeaders(),
   });
 
-  return handleResponse(res);
+  const response = await handleResponse(res);
+  return response.data;
 }
 
 export async function scheduleAudit(id: string, data: any) {
@@ -64,5 +66,6 @@ export async function scheduleAudit(id: string, data: any) {
     body: JSON.stringify(data),
   });
 
-  return handleResponse(res);
+  const response = await handleResponse(res);
+  return response.data;
 }

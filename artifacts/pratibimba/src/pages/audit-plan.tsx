@@ -28,8 +28,16 @@ interface ScheduleModalProps {
   auditors: string[];
 }
 function ScheduleModal({ plan, onClose, onSchedule, auditors }: ScheduleModalProps) {
-  const [startDate, setStartDate] = useState(new Date().toISOString().split("T")[0]);
-  const [endDate, setEndDate] = useState("");
+  const [startDate, setStartDate] = useState(
+    plan.auditPlannedDate
+      ? new Date(plan.auditPlannedDate).toISOString().split("T")[0]
+      : ""
+  );
+  const [endDate, setEndDate] = useState(
+    plan.auditPlannedDate
+      ? new Date(plan.auditPlannedDate).toISOString().split("T")[0]
+      : ""
+  );
   const [selectedAuditors, setSelectedAuditors] = useState<string[]>(plan.auditors || []);
   const [finalAuditor, setFinalAuditor] = useState(plan.auditors?.[0] || auditors[0]);
 
@@ -49,7 +57,13 @@ function ScheduleModal({ plan, onClose, onSchedule, auditors }: ScheduleModalPro
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">Start Date</label>
-              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+              <input
+                type="date"
+                value={startDate}
+                readOnly
+                disabled
+                className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-surface-container-low text-on-surface-variant cursor-not-allowed"
+              />
             </div>
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">End Date</label>
@@ -441,19 +455,19 @@ export default function AuditPlanPage() {
               if (editTarget === "new") {
                 await createAuditPlan(data);
               } else {
-              await updateAuditPlan(
-                (editTarget as AuditPlan).id,
-                data
-              );
+                await updateAuditPlan(
+                  (editTarget as AuditPlan).id,
+                  data
+                );
+              }
+
+              await loadAuditPlans();
+
+              setEditTarget(null);
+            } catch (err) {
+              console.error(err);
             }
-
-            await loadAuditPlans();
-
-            setEditTarget(null);
-          } catch (err) {
-            console.error(err);
-          }
-        }}
+          }}
           auditors={auditors}
           coordinators={coordinatorNames}
           onAddAuditor={addAuditor}
@@ -469,16 +483,16 @@ export default function AuditPlanPage() {
             <div className="flex gap-3">
               <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2.5 border border-outline-variant rounded-lg font-label-md">Cancel</button>
               <button onClick={async () => {
-                                try {
-                                  await deleteAuditPlan(deleteConfirm);
+                try {
+                  await deleteAuditPlan(deleteConfirm);
 
-                                  await loadAuditPlans();
+                  await loadAuditPlans();
 
-                                  setDeleteConfirm(null);
-                                } catch (err) {
-                                  console.error(err);
-                                }
-                              }} className="flex-1 py-2.5 bg-error text-white rounded-lg font-label-md font-bold">Delete</button>
+                  setDeleteConfirm(null);
+                } catch (err) {
+                  console.error(err);
+                }
+              }} className="flex-1 py-2.5 bg-error text-white rounded-lg font-label-md font-bold">Delete</button>
             </div>
           </div>
         </div>
