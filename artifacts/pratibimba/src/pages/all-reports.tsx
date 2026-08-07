@@ -11,6 +11,7 @@ import {
   updateReport,
 } from "../services/reportService";
 
+// Step 5: Updated Report Interface
 interface Report {
   _id: string;
   iqrNumber: string;
@@ -27,6 +28,7 @@ interface Report {
   proofFiles: string[];
   hasChecklist: boolean;
   createdAt: string;
+  updatedAt?: string;
   prakalphaPramukh?: string;
   auditor?: string;
   status?: string;
@@ -34,6 +36,8 @@ interface Report {
   completionRemarks?: string;
   closedBy?: string;
   closedAt?: string;
+  reportCreatedOn?: string;
+  reportClosedOn?: string;
 }
 
 function downloadCSV(reports: Report[]) {
@@ -252,13 +256,18 @@ export default function AllReportsPage() {
     [filtered]
   );
 
-  // Count reports open for > 30 days
+  // Step 8: Count red-flagged open reports (>30 days open)
   const redFlaggedCount = useMemo(() => {
     return filtered.filter((r) => {
-      const days = Math.floor(
-        (Date.now() - new Date(r.createdAt).getTime()) / 86400000
+      const startDate = new Date(r.reportCreatedOn || r.createdAt);
+      const endDate =
+        (r.status ?? "open") === "closed" && (r.reportClosedOn || r.closedAt)
+          ? new Date(r.reportClosedOn || r.closedAt!)
+          : new Date();
+      const daysOpen = Math.floor(
+        (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
       );
-      return (r.status ?? "open") === "open" && days > 30;
+      return (r.status ?? "open") === "open" && daysOpen > 30;
     }).length;
   }, [filtered]);
 
@@ -333,7 +342,7 @@ export default function AllReportsPage() {
         </div>
       </div>
 
-      {/* Warning Banner for >30d open reports */}
+      {/* Warning Banner */}
       {redFlaggedCount > 0 && (
         <div className="bg-error/5 border border-error/30 rounded-xl p-4 flex gap-4 items-center">
           <span className="material-symbols-outlined text-error text-[24px]">
@@ -485,11 +494,21 @@ export default function AllReportsPage() {
               </thead>
               <tbody className="divide-y divide-outline-variant/10">
                 {filtered.map((report, idx) => {
-                  const days = Math.floor(
-                    (Date.now() - new Date(report.createdAt).getTime()) /
-                      86400000
+                  // Step 8: Calculate Days Open from explicit lifecycle fields
+                  const startDate = new Date(
+                    report.reportCreatedOn || report.createdAt
                   );
-                  const isRedFlagged = (report.status ?? "open") === "open" && days > 30;
+                  const endDate =
+                    (report.status ?? "open") === "closed" &&
+                    (report.reportClosedOn || report.closedAt)
+                      ? new Date(report.reportClosedOn || report.closedAt!)
+                      : new Date();
+
+                  const daysOpen = Math.floor(
+                    (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
+                  );
+
+                  const isRedFlagged = (report.status ?? "open") === "open" && daysOpen > 30;
                   const ncObs = report.severity === "non_conformance" ? 1 : 0;
                   const ofiObs = report.severity === "open_for_improvement" ? 1 : 0;
 
@@ -604,14 +623,14 @@ export default function AllReportsPage() {
                       <td className="px-4 py-3">
                         <span
                           className={`font-data-mono text-[12px] ${
-                            days > 30
+                            daysOpen > 30 && (report.status ?? "open") === "open"
                               ? "text-error font-bold"
-                              : days > 14
+                              : daysOpen > 14 && (report.status ?? "open") === "open"
                               ? "text-error/60"
                               : "text-on-surface-variant"
                           }`}
                         >
-                          {days}d
+                          {daysOpen}d
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -707,219 +726,277 @@ export default function AllReportsPage() {
       )}
 
       {/* Rich Enterprise Report Detail Modal */}
-      {detailTarget && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setDetailTarget(null)}
-          />
-          <div className="relative bg-white rounded-2xl shadow-floating w-full max-w-3xl z-10 flex flex-col max-h-[92vh] overflow-hidden">
-            {/* Header */}
-            <div className="p-6 border-b border-outline-variant/10 shrink-0">
-              <div className="flex justify-between items-start">
-                <div>
-                  <div className="flex items-center gap-3">
-                    <h2 className="font-headline-md text-on-surface">
-                      {detailTarget.iqrNumber}
-                    </h2>
-                    <span
-                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase ${
-                        (detailTarget.status ?? "open") === "closed"
-                          ? "bg-secondary/10 text-secondary"
-                          : "bg-primary/10 text-primary"
-                      }`}
-                    >
-                      {detailTarget.status ?? "Open"}
-                    </span>
-                  </div>
-                  <p className="text-sm text-on-surface-variant mt-1 font-body-md">
-                    IQA Reference : {detailTarget.iqaNumber}
-                  </p>
-                </div>
+      {detailTarget && (() => {
+        // Step 8: Modal Days Open Scope
+        const startDate = new Date(
+          detailTarget.reportCreatedOn || detailTarget.createdAt
+        );
 
-                <button
-                  onClick={() => setDetailTarget(null)}
-                  className="p-2 rounded-full hover:bg-surface-container transition-colors"
-                >
-                  <span className="material-symbols-outlined">close</span>
-                </button>
+        const endDate =
+          detailTarget.status === "closed" &&
+          (detailTarget.reportClosedOn || detailTarget.closedAt)
+            ? new Date(detailTarget.reportClosedOn || detailTarget.closedAt!)
+            : new Date();
+
+        const modalDaysOpen = Math.floor(
+          (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
+        );
+
+        return (
+          <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setDetailTarget(null)}
+            />
+            <div className="relative bg-white rounded-2xl shadow-floating w-full max-w-3xl z-10 flex flex-col max-h-[92vh] overflow-hidden">
+              {/* Header */}
+              <div className="p-6 border-b border-outline-variant/10 shrink-0">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="flex items-center gap-3">
+                      <h2 className="font-headline-md text-on-surface">
+                        {detailTarget.iqrNumber}
+                      </h2>
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase ${
+                          (detailTarget.status ?? "open") === "closed"
+                            ? "bg-secondary/10 text-secondary"
+                            : "bg-primary/10 text-primary"
+                        }`}
+                      >
+                        {detailTarget.status ?? "Open"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-on-surface-variant mt-1 font-body-md">
+                      IQA Reference : {detailTarget.iqaNumber}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setDetailTarget(null)}
+                    className="p-2 rounded-full hover:bg-surface-container transition-colors"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {/* Modal Body */}
-            <div className="p-6 overflow-y-auto space-y-5 flex-1">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <div>
-                  <p className="text-xs text-on-surface-variant">IQR Number</p>
-                  <p className="font-semibold text-on-surface font-data-mono">{detailTarget.iqrNumber}</p>
-                </div>
-
-                <div>
-                  <p className="text-xs text-on-surface-variant">IQA Reference</p>
-                  <p className="font-semibold text-on-surface font-data-mono">{detailTarget.iqaNumber}</p>
-                </div>
-
-                <div>
-                  <p className="text-xs text-on-surface-variant">Domain</p>
-                  <p className="font-semibold text-on-surface">{detailTarget.domain}</p>
-                </div>
-
-                <div>
-                  <p className="text-xs text-on-surface-variant mb-1">Location</p>
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[18px] text-primary">
-                      location_on
-                    </span>
-                    <p className="font-semibold text-on-surface">
-                      {detailTarget.location}
-                      {detailTarget.sublocation
-                        ? `, ${detailTarget.sublocation}`
-                        : ""}
-                    </p>
+              {/* Modal Body */}
+              <div className="p-6 overflow-y-auto space-y-5 flex-1">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-xs text-on-surface-variant">IQR Number</p>
+                    <p className="font-semibold text-on-surface font-data-mono">{detailTarget.iqrNumber}</p>
                   </div>
-                </div>
 
-                <div>
-                  <p className="text-xs text-on-surface-variant mb-1">Coordinator</p>
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[18px] text-secondary">
-                      person
-                    </span>
-                    <p className="font-semibold text-on-surface">
-                      {detailTarget.auditCoordinator || "—"}
-                    </p>
+                  <div>
+                    <p className="text-xs text-on-surface-variant">IQA Reference</p>
+                    <p className="font-semibold text-on-surface font-data-mono">{detailTarget.iqaNumber}</p>
                   </div>
-                </div>
 
-                <div>
-                  <p className="text-xs text-on-surface-variant mb-1">Auditors</p>
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[18px] text-primary">
-                      badge
-                    </span>
-                    <p className="font-semibold text-on-surface">
-                      {detailTarget.auditors?.join(", ") ||
-                        detailTarget.auditor ||
-                        "—"}
-                    </p>
+                  <div>
+                    <p className="text-xs text-on-surface-variant">Domain</p>
+                    <p className="font-semibold text-on-surface">{detailTarget.domain}</p>
                   </div>
-                </div>
 
-                <div>
-                  <p className="text-xs text-on-surface-variant mb-1">Visit Date</p>
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[18px] text-primary">
-                      calendar_today
-                    </span>
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Location</p>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[18px] text-primary">
+                        location_on
+                      </span>
+                      <p className="font-semibold text-on-surface">
+                        {detailTarget.location}
+                        {detailTarget.sublocation
+                          ? `, ${detailTarget.sublocation}`
+                          : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Coordinator</p>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[18px] text-secondary">
+                        person
+                      </span>
+                      <p className="font-semibold text-on-surface">
+                        {detailTarget.auditCoordinator || "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Auditors</p>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[18px] text-primary">
+                        badge
+                      </span>
+                      <p className="font-semibold text-on-surface">
+                        {detailTarget.auditors?.join(", ") ||
+                          detailTarget.auditor ||
+                          "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Visit Date</p>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[18px] text-primary">
+                        calendar_today
+                      </span>
+                      <p className="font-semibold text-on-surface">
+                        {detailTarget.visitDate
+                          ? new Date(detailTarget.visitDate).toLocaleDateString("en-IN")
+                          : "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Visit Time</p>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[18px] text-primary">
+                        schedule
+                      </span>
+                      <p className="font-semibold text-on-surface">
+                        {detailTarget.visitTime || "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Step 6: Report Created On */}
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Report Created On</p>
                     <p className="font-semibold text-on-surface">
-                      {detailTarget.visitDate
-                        ? new Date(detailTarget.visitDate).toLocaleDateString("en-IN")
+                      {detailTarget.reportCreatedOn || detailTarget.createdAt
+                        ? new Date(
+                            detailTarget.reportCreatedOn || detailTarget.createdAt
+                          ).toLocaleString("en-IN", {
+                            day: "2-digit",
+                            month: "short",
+                            year: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })
                         : "—"}
                     </p>
                   </div>
-                </div>
 
-                <div>
-                  <p className="text-xs text-on-surface-variant mb-1">Visit Time</p>
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[18px] text-primary">
-                      schedule
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Classification</p>
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full font-bold text-xs ${
+                        detailTarget.severity === "non_conformance"
+                          ? "bg-error/10 text-error"
+                          : "bg-primary/10 text-primary"
+                      }`}
+                    >
+                      {detailTarget.severity === "non_conformance"
+                        ? "🚩 Non-Conformance"
+                        : "Open For Improvement"}
                     </span>
+                  </div>
+
+                  {/* Step 7: Report Closed On */}
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Report Closed On</p>
                     <p className="font-semibold text-on-surface">
-                      {detailTarget.visitTime || "—"}
+                      {detailTarget.reportClosedOn || detailTarget.closedAt
+                        ? new Date(
+                            detailTarget.reportClosedOn || detailTarget.closedAt!
+                          ).toLocaleString("en-IN", {
+                            day: "2-digit",
+                            month: "short",
+                            year: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })
+                        : "—"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Closed By</p>
+                    <p className="font-semibold text-on-surface">
+                      {detailTarget.closedBy || "—"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-on-surface-variant mb-1">Days Open</p>
+                    <p
+                      className={`font-semibold ${
+                        modalDaysOpen > 30 && detailTarget.status === "open"
+                          ? "text-error"
+                          : "text-on-surface"
+                      }`}
+                    >
+                      {modalDaysOpen} Day{modalDaysOpen !== 1 ? "s" : ""}
                     </p>
                   </div>
                 </div>
 
                 <div>
-                  <p className="text-xs text-on-surface-variant mb-1">Classification</p>
-                  <span
-                    className={`inline-flex items-center px-3 py-1 rounded-full font-bold text-xs ${
-                      detailTarget.severity === "non_conformance"
-                        ? "bg-error/10 text-error"
-                        : "bg-primary/10 text-primary"
-                    }`}
-                  >
-                    {detailTarget.severity === "non_conformance"
-                      ? "🚩 Non-Conformance"
-                      : "Open For Improvement"}
-                  </span>
-                </div>
-
-                {/* Step 8: Additional Closure Metadata */}
-                <div>
-                  <p className="text-xs text-on-surface-variant">Closed By</p>
-                  <p className="font-semibold text-on-surface">{detailTarget.closedBy || "—"}</p>
-                </div>
-
-                <div>
-                  <p className="text-xs text-on-surface-variant">Closed At</p>
-                  <p className="font-semibold text-on-surface">
-                    {detailTarget.closedAt
-                      ? new Date(detailTarget.closedAt).toLocaleString("en-IN")
-                      : "—"}
-                  </p>
-                </div>
-              </div>
-
-              <div>
-                <p className="font-semibold text-on-surface mb-2">Audit Findings</p>
-                <div className="rounded-xl border border-primary/10 bg-primary/5 p-5 shadow-sm whitespace-pre-wrap leading-relaxed font-body-md text-on-surface">
-                  {detailTarget.findings || "No findings recorded."}
-                </div>
-              </div>
-
-              {/* Step 8: Action Taken Section */}
-              <div>
-                <p className="font-semibold text-on-surface mb-2">Action Taken</p>
-                <div className="rounded-xl border border-outline-variant/20 p-4 bg-surface-container-lowest font-body-md text-on-surface leading-relaxed whitespace-pre-wrap">
-                  {detailTarget.actionTaken || "—"}
-                </div>
-              </div>
-
-              {/* Step 8: Completion Remarks Section */}
-              <div>
-                <p className="font-semibold text-on-surface mb-2">Completion Remarks</p>
-                <div className="rounded-xl border border-outline-variant/20 p-4 bg-surface-container-lowest font-body-md text-on-surface leading-relaxed whitespace-pre-wrap">
-                  {detailTarget.completionRemarks || "—"}
-                </div>
-              </div>
-
-              {/* Evidence Files Section */}
-              {detailTarget.proofFiles && detailTarget.proofFiles.length > 0 && (
-                <div>
-                  <p className="font-semibold text-on-surface mb-2">Evidence Files</p>
-                  <div className="flex flex-wrap gap-2">
-                    {detailTarget.proofFiles.map((file) => (
-                      <div
-                        key={file}
-                        className="px-3 py-2 rounded-lg border border-secondary/20 bg-secondary/5 text-secondary text-sm flex items-center gap-2 font-label-md"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">
-                          attach_file
-                        </span>
-                        {file}
-                      </div>
-                    ))}
+                  <p className="font-semibold text-on-surface mb-2">Audit Findings</p>
+                  <div className="rounded-xl border border-primary/10 bg-primary/5 p-5 shadow-sm whitespace-pre-wrap leading-relaxed font-body-md text-on-surface">
+                    {detailTarget.findings || "No findings recorded."}
                   </div>
                 </div>
-              )}
-            </div>
 
-            {/* Modal Footer */}
-            <div className="p-4 border-t border-outline-variant/10 shrink-0 flex justify-end">
-              <button
-                onClick={() => setDetailTarget(null)}
-                className="px-5 py-2 bg-primary text-on-primary rounded-lg font-label-md font-bold hover:brightness-110 transition-all"
-              >
-                Close
-              </button>
+                {/* Action Taken Section */}
+                <div>
+                  <p className="font-semibold text-on-surface mb-2">Action Taken</p>
+                  <div className="rounded-xl border border-outline-variant/20 p-4 bg-surface-container-lowest font-body-md text-on-surface leading-relaxed whitespace-pre-wrap">
+                    {detailTarget.actionTaken || "—"}
+                  </div>
+                </div>
+
+                {/* Completion Remarks Section */}
+                <div>
+                  <p className="font-semibold text-on-surface mb-2">Completion Remarks</p>
+                  <div className="rounded-xl border border-outline-variant/20 p-4 bg-surface-container-lowest font-body-md text-on-surface leading-relaxed whitespace-pre-wrap">
+                    {detailTarget.completionRemarks || "—"}
+                  </div>
+                </div>
+
+                {/* Evidence Files Section */}
+                {detailTarget.proofFiles && detailTarget.proofFiles.length > 0 && (
+                  <div>
+                    <p className="font-semibold text-on-surface mb-2">Evidence Files</p>
+                    <div className="flex flex-wrap gap-2">
+                      {detailTarget.proofFiles.map((file) => (
+                        <div
+                          key={file}
+                          className="px-3 py-2 rounded-lg border border-secondary/20 bg-secondary/5 text-secondary text-sm flex items-center gap-2 font-label-md"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">
+                            attach_file
+                          </span>
+                          {file}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 border-t border-outline-variant/10 shrink-0 flex justify-end">
+                <button
+                  onClick={() => setDetailTarget(null)}
+                  className="px-5 py-2 bg-primary text-on-primary rounded-lg font-label-md font-bold hover:brightness-110 transition-all"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
-      {/* Step 7: Edit Report Modal */}
+      {/* Edit Report Modal */}
       {editTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div

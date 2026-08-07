@@ -9,6 +9,12 @@ import {
   createReport,
 } from "../services/reportService";
 
+interface ObservationItem {
+  findings: string;
+  severity: "open_for_improvement" | "non_conformance" | "";
+  proofFiles: string[];
+}
+
 export default function CreateReportPage() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -16,16 +22,22 @@ export default function CreateReportPage() {
   const [audit, setAudit] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  const [form, setForm] = useState({
-    visitTime: new Date().toTimeString().slice(0, 5),
-    severity: "" as "open_for_improvement" | "non_conformance" | "",
-    findings: "",
-    hasChecklist: false,
-  });
-  const [files, setFiles] = useState<string[]>([]);
+  // STEP 1: Multi-observation state setup
+  const [visitTime, setVisitTime] = useState(
+    new Date().toTimeString().slice(0, 5)
+  );
+  const [hasChecklist, setHasChecklist] = useState(false);
+  const [observations, setObservations] = useState<ObservationItem[]>([
+    {
+      findings: "",
+      severity: "",
+      proofFiles: [],
+    },
+  ]);
+
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRefs = useRef<{ [key: number]: HTMLInputElement | null }>({});
 
   useEffect(() => {
     loadAudit();
@@ -42,16 +54,78 @@ export default function CreateReportPage() {
     }
   };
 
-  const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  // Helper functions for Observations & File Uploads
+  const updateObservation = (
+    index: number,
+    field: "findings" | "severity",
+    value: any
+  ) => {
+    setObservations((prev) =>
+      prev.map((obs, i) =>
+        i === index
+          ? {
+              ...obs,
+              [field]: value,
+            }
+          : obs
+      )
+    );
+  };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const addObservation = () => {
+    setObservations((prev) => [
+      ...prev,
+      {
+        findings: "",
+        severity: "",
+        proofFiles: [],
+      },
+    ]);
+  };
+
+  const removeObservation = (index: number) => {
+    if (index === 0) return;
+    setObservations((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleFileChange = (
+    index: number,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const selected = Array.from(e.target.files || []).map((f) => f.name);
-    setFiles((prev) => [...prev, ...selected]);
+    setObservations((prev) =>
+      prev.map((obs, i) =>
+        i === index
+          ? {
+              ...obs,
+              proofFiles: [...obs.proofFiles, ...selected],
+            }
+          : obs
+      )
+    );
+  };
+
+  const removeFileFromObservation = (obsIndex: number, fileIndex: number) => {
+    setObservations((prev) =>
+      prev.map((obs, i) =>
+        i === obsIndex
+          ? {
+              ...obs,
+              proofFiles: obs.proofFiles.filter((_, j) => j !== fileIndex),
+            }
+          : obs
+      )
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!audit || !form.severity || !form.findings.trim()) return;
+
+    if (!audit) return;
+    for (const obs of observations) {
+      if (!obs.findings.trim() || !obs.severity) return;
+    }
+
     setSubmitting(true);
     try {
       const auditId = audit._id || audit.id;
@@ -60,14 +134,19 @@ export default function CreateReportPage() {
         scheduledAuditId: auditId,
         scheduledAudit: auditId,
         visitDate: new Date(),
-        visitTime: form.visitTime,
-        severity: form.severity,
-        findings: form.findings,
-        proofFiles: files,
-        hasChecklist: form.hasChecklist,
+        visitTime,
+        hasChecklist,
+        observations,
       });
 
-      setSuccess(report.iqrNumber || report.data?.iqrNumber);
+      // Handled array / single response from backend
+      const count = Array.isArray(report)
+        ? report.length
+        : Array.isArray(report?.data)
+        ? report.data.length
+        : observations.length;
+
+      setSuccess(`${count} reports generated`);
 
       setTimeout(() => {
         navigate("/all-reports");
@@ -81,7 +160,9 @@ export default function CreateReportPage() {
   };
 
   if (loading) {
-    return <div className="p-8 font-body-md text-on-surface-variant">Loading...</div>;
+    return (
+      <div className="p-8 font-body-md text-on-surface-variant">Loading...</div>
+    );
   }
 
   if (!audit) {
@@ -103,6 +184,7 @@ export default function CreateReportPage() {
     );
   }
 
+  // Updated Success Screen UI
   if (success) {
     return (
       <div className="p-8 flex items-center justify-center min-h-[70vh]">
@@ -117,12 +199,12 @@ export default function CreateReportPage() {
               Report Created!
             </h2>
             <p className="font-body-md text-on-surface-variant">
-              Your audit report has been submitted successfully.
+              Your audit report(s) have been submitted successfully.
             </p>
           </div>
           <div className="bg-secondary/5 border border-secondary/20 rounded-xl p-5">
             <p className="font-label-md text-on-surface-variant/70 mb-1">
-              Report Number
+              Reports Generated
             </p>
             <p className="font-data-mono text-[20px] font-black text-secondary">
               {success}
@@ -201,7 +283,7 @@ export default function CreateReportPage() {
         </div>
 
         <div className="p-6 space-y-6">
-          {/* Auto-filled fields */}
+          {/* Header Controls */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">
@@ -227,8 +309,8 @@ export default function CreateReportPage() {
               </label>
               <input
                 type="time"
-                value={form.visitTime}
-                onChange={(e) => set("visitTime", e.target.value)}
+                value={visitTime}
+                onChange={(e) => setVisitTime(e.target.value)}
                 required
                 className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
               />
@@ -249,146 +331,193 @@ export default function CreateReportPage() {
             </div>
           </div>
 
-          {/* Severity */}
-          <div>
-            <label className="font-label-md text-on-surface-variant block mb-2">
-              Severity of Findings *
-            </label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {(
-                ["open_for_improvement", "non_conformance"] as const
-              ).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => set("severity", s)}
-                  className={`p-5 rounded-xl border-2 text-left transition-all ${
-                    form.severity === s
-                      ? s === "non_conformance"
-                        ? "border-error bg-error/5"
-                        : "border-primary bg-primary/5"
-                      : "border-outline-variant hover:border-on-surface-variant/30 hover:bg-surface-container-lowest"
-                  }`}
-                >
-                  <div className="flex items-center gap-3 mb-2">
-                    <span
-                      className={`material-symbols-outlined text-[24px] ${
-                        form.severity === s
-                          ? s === "non_conformance"
-                            ? "text-error"
-                            : "text-primary"
-                          : "text-on-surface-variant/50"
-                      }`}
-                    >
-                      {s === "non_conformance" ? "error_outline" : "info"}
-                    </span>
-                    <span
-                      className={`font-label-md font-bold ${
-                        form.severity === s
-                          ? s === "non_conformance"
-                            ? "text-error"
-                            : "text-primary"
-                          : "text-on-surface-variant"
-                      }`}
-                    >
-                      {s === "non_conformance"
-                        ? "Non-Conformance"
-                        : "Open for Improvement"}
-                    </span>
-                    {form.severity === s && (
-                      <span className="material-symbols-outlined text-[18px] ml-auto text-secondary filled">
-                        check_circle
-                      </span>
-                    )}
-                  </div>
-                  <p className="font-label-md text-on-surface-variant/70">
-                    {s === "non_conformance"
-                      ? "A critical deficiency that requires immediate corrective action."
-                      : "An opportunity to improve processes or systems."}
-                  </p>
-                </button>
-              ))}
-            </div>
-          </div>
+          <hr className="border-outline-variant/10" />
 
-          {/* Findings */}
-          <div>
-            <label className="font-label-md text-on-surface-variant block mb-1">
-              Audit Findings *
-            </label>
-            <textarea
-              value={form.findings}
-              onChange={(e) => set("findings", e.target.value)}
-              rows={5}
-              required
-              placeholder="Describe the audit findings in detail..."
-              className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none transition-all"
-            />
-            <p className="font-label-md text-on-surface-variant/50 mt-1">
-              {form.findings.length} characters
-            </p>
-          </div>
-
-          {/* Evidence Upload */}
-          <div>
-            <label className="font-label-md text-on-surface-variant block mb-2">
-              Proof / Evidence
-            </label>
-            <div
-              className="border-2 border-dashed border-outline-variant rounded-xl p-8 flex flex-col items-center justify-center gap-3 hover:bg-surface-container-lowest transition-colors cursor-pointer group"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <span className="material-symbols-outlined text-[36px] text-on-surface-variant/30 group-hover:text-primary transition-colors">
-                cloud_upload
-              </span>
-              <p className="font-body-md font-semibold text-on-surface">
-                Click to upload evidence
-              </p>
-              <p className="font-label-md text-on-surface-variant/60">
-                Images, PDF, video (Max 10MB each)
-              </p>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*,.pdf,.mp4,.mov,.docx"
-                className="hidden"
-                onChange={handleFileChange}
-              />
-            </div>
-            {files.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {files.map((f, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2 px-3 py-2 bg-secondary/5 border border-secondary/20 rounded-lg"
-                  >
-                    <span className="material-symbols-outlined text-secondary text-[16px]">
-                      attach_file
+          {/* Dynamic Observations List */}
+          <div className="space-y-6">
+            {observations.map((observation, index) => (
+              <div
+                key={index}
+                className="border border-outline-variant/20 rounded-xl p-5 space-y-5 bg-surface-container-lowest/30 relative"
+              >
+                <div className="flex justify-between items-center border-b border-outline-variant/10 pb-3">
+                  <h3 className="font-headline-sm text-on-surface flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-[12px] font-bold flex items-center justify-center font-data-mono">
+                      {index + 1}
                     </span>
-                    <span className="font-label-md text-secondary">{f}</span>
+                    Observation {index + 1}
+                  </h3>
+
+                  {index > 0 && (
                     <button
                       type="button"
-                      onClick={() =>
-                        setFiles((prev) => prev.filter((_, j) => j !== i))
-                      }
-                      className="material-symbols-outlined text-[14px] text-on-surface-variant/50 hover:text-error ml-1"
+                      onClick={() => removeObservation(index)}
+                      className="text-error font-label-md text-sm hover:underline flex items-center gap-1"
                     >
-                      close
+                      <span className="material-symbols-outlined text-[16px]">
+                        delete
+                      </span>
+                      Remove Observation
                     </button>
+                  )}
+                </div>
+
+                {/* Classification / Severity */}
+                <div>
+                  <label className="font-label-md text-on-surface-variant block mb-2 font-semibold">
+                    Classification *
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {(
+                      [
+                        "open_for_improvement",
+                        "non_conformance",
+                      ] as const
+                    ).map((severity) => (
+                      <button
+                        key={severity}
+                        type="button"
+                        onClick={() =>
+                          updateObservation(index, "severity", severity)
+                        }
+                        className={`p-4 rounded-xl border-2 text-left transition-all ${
+                          observation.severity === severity
+                            ? severity === "non_conformance"
+                              ? "border-error bg-error/5"
+                              : "border-primary bg-primary/5"
+                            : "border-outline-variant/40 hover:border-on-surface-variant/30 hover:bg-surface-container-lowest"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 mb-1">
+                          <span
+                            className={`material-symbols-outlined text-[20px] ${
+                              observation.severity === severity
+                                ? severity === "non_conformance"
+                                  ? "text-error"
+                                  : "text-primary"
+                                : "text-on-surface-variant/50"
+                            }`}
+                          >
+                            {severity === "non_conformance"
+                              ? "error_outline"
+                              : "info"}
+                          </span>
+                          <span
+                            className={`font-label-md font-bold text-sm ${
+                              observation.severity === severity
+                                ? severity === "non_conformance"
+                                  ? "text-error"
+                                  : "text-primary"
+                                : "text-on-surface-variant"
+                            }`}
+                          >
+                            {severity === "non_conformance"
+                              ? "Non-Conformance (NC)"
+                              : "Open For Improvement (OFI)"}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
                   </div>
-                ))}
+                </div>
+
+                {/* Finding Description */}
+                <div>
+                  <label className="font-label-md text-on-surface-variant block mb-1 font-semibold">
+                    Finding *
+                  </label>
+                  <textarea
+                    rows={4}
+                    required
+                    value={observation.findings}
+                    onChange={(e) =>
+                      updateObservation(index, "findings", e.target.value)
+                    }
+                    placeholder="Describe the finding in detail..."
+                    className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none transition-all text-sm"
+                  />
+                  <p className="font-label-md text-on-surface-variant/50 mt-1 text-[11px]">
+                    {observation.findings.length} characters
+                  </p>
+                </div>
+
+                {/* Evidence Files */}
+                <div>
+                  <label className="font-label-md text-on-surface-variant block mb-2 font-semibold">
+                    Evidence / Proof Files
+                  </label>
+                  <div
+                    className="border-2 border-dashed border-outline-variant/40 rounded-xl p-5 flex flex-col items-center justify-center gap-2 hover:bg-surface-container-lowest transition-colors cursor-pointer group"
+                    onClick={() => fileInputRefs.current[index]?.click()}
+                  >
+                    <span className="material-symbols-outlined text-[28px] text-on-surface-variant/40 group-hover:text-primary transition-colors">
+                      cloud_upload
+                    </span>
+                    <p className="font-body-md text-xs font-semibold text-on-surface">
+                      Click to upload evidence for Observation {index + 1}
+                    </p>
+                    <input
+                      ref={(el) => {
+                        fileInputRefs.current[index] = el;
+                      }}
+                      type="file"
+                      multiple
+                      accept="image/*,.pdf,.mp4,.mov,.docx"
+                      className="hidden"
+                      onChange={(e) => handleFileChange(index, e)}
+                    />
+                  </div>
+
+                  {observation.proofFiles.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {observation.proofFiles.map((file, fileIdx) => (
+                        <div
+                          key={fileIdx}
+                          className="flex items-center gap-2 px-3 py-1.5 bg-secondary/5 border border-secondary/20 rounded-lg"
+                        >
+                          <span className="material-symbols-outlined text-secondary text-[16px]">
+                            attach_file
+                          </span>
+                          <span className="font-label-md text-secondary text-xs">
+                            {file}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              removeFileFromObservation(index, fileIdx)
+                            }
+                            className="material-symbols-outlined text-[14px] text-on-surface-variant/50 hover:text-error ml-1"
+                          >
+                            close
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
+            ))}
           </div>
 
-          {/* Checklist */}
+          {/* Add Observation Button */}
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={addObservation}
+              className="px-5 py-2.5 rounded-lg bg-secondary/10 text-secondary border border-secondary/20 hover:bg-secondary/20 transition-all font-label-md font-bold text-sm flex items-center gap-2"
+            >
+              <span className="material-symbols-outlined text-[18px]">add</span>
+              Add Another Observation
+            </button>
+          </div>
+
+          {/* Checklist Switch */}
           <div className="flex items-center gap-3 p-4 bg-surface-container-lowest rounded-lg border border-outline-variant/30">
             <input
               type="checkbox"
               id="checklist"
-              checked={form.hasChecklist}
-              onChange={(e) => set("hasChecklist", e.target.checked)}
+              checked={hasChecklist}
+              onChange={(e) => setHasChecklist(e.target.checked)}
               className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
             />
             <label htmlFor="checklist" className="flex-1 cursor-pointer">
@@ -400,8 +529,23 @@ export default function CreateReportPage() {
               </p>
             </label>
           </div>
+
+          {/* Observation Summary UX Banner */}
+          <div className="rounded-lg bg-primary/5 border border-primary/20 p-4 space-y-1">
+            <p className="font-semibold text-on-surface font-label-md text-sm">
+              This audit currently contains{" "}
+              <strong className="text-primary font-bold">
+                {observations.length}
+              </strong>{" "}
+              observation(s).
+            </p>
+            <p className="text-xs text-on-surface-variant font-body-md">
+              Each observation will generate one Report (IQR) while sharing the same IQA Number.
+            </p>
+          </div>
         </div>
 
+        {/* Form Footer & Submit Button */}
         <div className="p-6 pt-0 border-t border-outline-variant/10 bg-surface-container-lowest flex gap-3">
           <button
             type="button"
@@ -412,7 +556,12 @@ export default function CreateReportPage() {
           </button>
           <button
             type="submit"
-            disabled={submitting || !form.severity || !form.findings.trim()}
+            disabled={
+              submitting ||
+              observations.some(
+                (o) => !o.findings.trim() || !o.severity
+              )
+            }
             className="flex-1 py-3 bg-primary text-on-primary rounded-lg font-label-md font-bold hover:brightness-110 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {submitting ? (
@@ -436,14 +585,14 @@ export default function CreateReportPage() {
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                   />
                 </svg>
-                Submitting...
+                Submitting Reports...
               </>
             ) : (
               <>
                 <span className="material-symbols-outlined text-[18px]">
                   send
                 </span>
-                Submit Report
+                Submit {observations.length} Report{observations.length > 1 ? "s" : ""}
               </>
             )}
           </button>

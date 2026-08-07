@@ -98,7 +98,15 @@ const reportSchema = new mongoose.Schema(
       enum: ["open", "closed"],
       default: "open",
     },
+    reportCreatedOn: {
+      type: Date,
+      default: null,
+    },
 
+    reportClosedOn: {
+      type: Date,
+      default: null,
+    },
     actionTaken: {
       type: String,
       default: "",

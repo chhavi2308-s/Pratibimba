@@ -13,7 +13,7 @@ import {
 } from "../services/scheduledAuditService";
 
 export default function ScheduledAuditsPage() {
-  const { reports, currentUser, auditors } = useApp();
+  const { currentUser, auditors } = useApp();
 
   const [, navigate] = useLocation();
   const [scheduledAudits, setScheduledAudits] = useState<ScheduledAudit[]>([]);
@@ -252,8 +252,6 @@ export default function ScheduledAuditsPage() {
                     "Pramukh",
                     "Status",
                     "Mail",
-                    "NC",
-                    "OFI",
                     ...(isLead ? ["Actions"] : []),
                   ].map((h) => (
                     <th
@@ -268,15 +266,6 @@ export default function ScheduledAuditsPage() {
               <tbody className="divide-y divide-outline-variant/10">
                 {filtered.map((audit, idx) => {
                   const { label, cls } = statusBadge(audit);
-                  const auditReports = reports.filter(
-                    (r) => r.iqaNumber === audit.iqaNumber
-                  );
-                  const ncIARs = auditReports.filter(
-                    (r) => r.severity === "non_conformance"
-                  ).length;
-                  const ofiIARs = auditReports.filter(
-                    (r) => r.severity === "open_for_improvement"
-                  ).length;
                   const now = new Date();
                   const start = new Date(audit.startDate);
                   const end = new Date(audit.endDate);
@@ -391,24 +380,13 @@ export default function ScheduledAuditsPage() {
                               await markMailSent(id);
                               await loadScheduledAudits();
                             }}
-                            className="text-primary hover:underline text-[11px]"
+                            className="text-primary hover:underline text-[11px] inline-flex items-center"
                           >
+                            <span className="material-symbols-outlined text-[14px] mr-1 align-middle">
+                              mail
+                            </span>
                             Send Mail
                           </button>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-center font-data-mono font-bold text-[13px]">
-                        {ncIARs > 0 ? (
-                          <span className="text-error">{ncIARs}</span>
-                        ) : (
-                          <span className="text-on-surface-variant/30">0</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-center font-data-mono font-bold text-[13px]">
-                        {ofiIARs > 0 ? (
-                          <span className="text-primary">{ofiIARs}</span>
-                        ) : (
-                          <span className="text-on-surface-variant/30">0</span>
                         )}
                       </td>
                       {isLead && (
@@ -612,7 +590,6 @@ export default function ScheduledAuditsPage() {
 
             <div className="flex justify-end gap-3 p-6 border-t border-outline-variant/10">
               <button
-
                 onClick={() => {
                   setReportTarget(null);
                   setReportConfirmed(false);
