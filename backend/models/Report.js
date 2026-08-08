@@ -55,6 +55,25 @@ const reportSchema = new mongoose.Schema(
       default: [],
     },
 
+    // =========================
+    // Audit Metadata
+    // =========================
+
+    auditAreas: {
+      type: [String],
+      default: [],
+    },
+
+    purpose: {
+      type: String,
+      default: "",
+    },
+
+    prakalphaPramukh: {
+      type: String,
+      default: "",
+    },
+
     visitDate: {
       type: Date,
       required: true,

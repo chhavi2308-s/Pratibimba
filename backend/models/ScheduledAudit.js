@@ -62,6 +62,11 @@ const scheduledAuditSchema = new mongoose.Schema(
       default: [],
     },
 
+    purpose: {
+      type: String,
+      default: "",
+    },
+
     startDate: {
       type: Date,
       required: true,

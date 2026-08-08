@@ -77,12 +77,12 @@ function downloadCSV(
       report.visitDate || "",
       auditDays,
       (report.auditors || []).join("; "),
-      "",
+      (report.auditAreas || []).join("; "),
       completionDate,
       classifications || "—",
       r.length,
       status,
-      "—",
+      report.prakalphaPramukh || "",
       ncIARs,
       ofiIARs,
     ]
@@ -206,15 +206,24 @@ export default function IQASummaryPage() {
       const matchSearch =
         !search ||
         report.iqaNumber.toLowerCase().includes(search.toLowerCase()) ||
-        report.domain.toLowerCase().includes(search.toLowerCase());
+        report.domain.toLowerCase().includes(search.toLowerCase()) ||
+        (report.prakalphaPramukh || "")
+          .toLowerCase()
+          .includes(search.toLowerCase());
       const matchDomain = filterDomain === "All" || report.domain === filterDomain;
       const matchLocation = filterLocation === "All" || report.location === filterLocation;
       const matchCoord =
         filterCoordinator === "All" || report.auditCoordinator === filterCoordinator;
       const matchStatus =
         filterStatus === "All" || statusLabel.toLowerCase() === filterStatus.toLowerCase();
-      const matchPramukh = !filterPramukh; // STEP 10: Pramukh fallback
-      const matchArea = filterAuditArea === "All"; // STEP 8: Audit Area fallback
+      const matchPramukh =
+        !filterPramukh ||
+        (report.prakalphaPramukh || "")
+          .toLowerCase()
+          .includes(filterPramukh.toLowerCase()); // STEP 10: Pramukh fallback
+      const matchArea =
+        filterAuditArea === "All" ||
+        (report.auditAreas || []).includes(filterAuditArea);
       return (
         matchSearch &&
         matchDomain &&
@@ -410,15 +419,15 @@ export default function IQASummaryPage() {
                 filtered.map(({ report, reports: auditReports }, idx) => {
                   const statusBadge = getAuditStatus(auditReports);
                   const ncIARs = auditReports.filter(
-                    (r) => r.severity === "non_conformance"
+                    (r: any) => r.severity === "non_conformance"
                   ).length;
                   const ofiIARs = auditReports.filter(
-                    (r) => r.severity === "open_for_improvement"
+                    (r: any) => r.severity === "open_for_improvement"
                   ).length;
                   const hasFlag = auditReports.some(isRedFlagged);
                   const allClosed =
                     auditReports.length > 0 &&
-                    auditReports.every((r) => r.status === "closed");
+                    auditReports.every((r: any) => r.status === "closed");
 
                   // STEP 5: Max days open calculated across group
                   const daysList = auditReports.map(getDaysOpen);
@@ -556,7 +565,22 @@ export default function IQASummaryPage() {
 
                         {/* STEP 8: Audit Areas */}
                         <td className="px-3 py-3 max-w-[120px]">
-                          <span className="text-on-surface-variant/50">—</span>
+                          <div className="flex flex-wrap gap-1">
+                            {(report.auditAreas || []).slice(0, 2).map((area: string) => (
+                              <span
+                                key={area}
+                                className="px-1 py-0.5 bg-primary/10 text-primary rounded text-[9px] font-bold whitespace-nowrap"
+                              >
+                                {area}
+                              </span>
+                            ))}
+
+                            {(report.auditAreas || []).length > 2 && (
+                              <span className="text-[9px] text-on-surface-variant">
+                                +{report.auditAreas.length - 2}
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         {/* STEP 6: Completion Date */}
@@ -600,7 +624,7 @@ export default function IQASummaryPage() {
 
                         {/* STEP 10: Prakalpa Pramukh */}
                         <td className="px-3 py-3 text-on-surface-variant whitespace-nowrap">
-                          —
+                          {report.prakalphaPramukh || "—"}
                         </td>
 
                         {/* NC Count */}
@@ -651,6 +675,16 @@ export default function IQASummaryPage() {
                             <div className="space-y-3">
                               {/* STEP 9: Sublocation display */}
                               <div className="flex flex-wrap gap-4 font-body-md text-on-surface-variant text-[12px]">
+
+                                {report.purpose && (
+                                  <span>
+                                    <strong className="text-on-surface">
+                                      Purpose:
+                                    </strong>{" "}
+                                    {report.purpose}
+                                  </span>
+                                )}
+
                                 {report.sublocation && (
                                   <span>
                                     <strong className="text-on-surface">
@@ -659,6 +693,7 @@ export default function IQASummaryPage() {
                                     {report.sublocation}
                                   </span>
                                 )}
+
                               </div>
 
                               {auditReports.length === 0 ? (
@@ -667,7 +702,7 @@ export default function IQASummaryPage() {
                                 </p>
                               ) : (
                                 <div className="space-y-2">
-                                  {auditReports.map((rp) => {
+                                  {auditReports.map((rp: any) => {
                                     const flagged = isRedFlagged(rp);
                                     return (
                                       <div
@@ -679,9 +714,17 @@ export default function IQASummaryPage() {
                                         }`}
                                       >
                                         <div className="flex flex-wrap items-center gap-3">
-                                          <span className="font-data-mono text-[11px] font-bold text-primary">
-                                            {rp.iqrNumber}
-                                          </span>
+                                          <div className="flex flex-col">
+
+                                            <span className="font-data-mono text-[11px] font-bold text-primary">
+                                              {rp.iqrNumber}
+                                            </span>
+
+                                            <span className="text-[9px] text-on-surface-variant">
+                                              {rp.iqaNumber}
+                                            </span>
+
+                                          </div>
                                           <span
                                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                               rp.severity === "non_conformance"
@@ -712,9 +755,56 @@ export default function IQASummaryPage() {
                                           )}
                                         </div>
 
-                                        <p className="font-label-md text-on-surface-variant/80 text-[11px]">
-                                          {rp.findings || "—"}
-                                        </p>
+                                        <div className="flex-1 space-y-1">
+
+                                          <div className="font-label-md text-on-surface text-[11px]">
+                                            <strong>Finding:</strong>{" "}
+                                            {rp.findings || "—"}
+                                          </div>
+
+                                          <div className="flex flex-wrap gap-4 text-[10px] text-on-surface-variant">
+
+                                            <span>
+                                              <strong>Created:</strong>{" "}
+                                              {rp.reportCreatedOn
+                                                ? new Date(rp.reportCreatedOn).toLocaleDateString("en-IN")
+                                                : "—"}
+                                            </span>
+
+                                            <span>
+                                              <strong>Closed:</strong>{" "}
+                                              {rp.reportClosedOn
+                                                ? new Date(rp.reportClosedOn).toLocaleDateString("en-IN")
+                                                : "—"}
+                                            </span>
+
+                                            <span>
+                                              <strong>Days Open:</strong>{" "}
+                                              {getDaysOpen(rp)}
+                                            </span>
+
+                                          </div>
+                                          <div className="flex flex-wrap gap-4 text-[10px] text-on-surface-variant">
+
+                                            <span>
+                                              <strong>Audit Areas:</strong>{" "}
+                                              {(rp.auditAreas || []).join(", ") || "—"}
+                                            </span>
+
+                                            <span>
+                                              <strong>Pramukh:</strong>{" "}
+                                              {rp.prakalphaPramukh || "—"}
+                                            </span>
+
+                                            {rp.purpose && (
+                                              <span>
+                                                <strong>Purpose:</strong>{" "}
+                                                {rp.purpose}
+                                              </span>
+                                            )}
+
+                                          </div>
+                                        </div>
 
                                         {/* Rich Backend Lifecycle Metadata Cards */}
                                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-outline-variant/10 text-[11px] text-on-surface-variant">
