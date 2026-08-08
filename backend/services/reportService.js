@@ -67,7 +67,22 @@ export const createReport = async (data) => {
       location: audit.location,
       sublocation: audit.sublocation,
       auditCoordinator: audit.auditCoordinator,
+
       auditors: audit.auditors,
+
+      // =========================
+      // Audit Metadata
+      // =========================
+
+      auditAreas:
+        audit.auditAreas || [],
+
+      purpose:
+        audit.purpose || "",
+
+      prakalphaPramukh:
+        audit.prakalphaPramukh || "",
+
       visitDate: data.visitDate,
       visitTime: data.visitTime,
       severity: observation.severity,

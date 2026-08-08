@@ -94,6 +94,9 @@ export const updateAuditPlan = async (id, data) => {
     scheduledAudit.auditAreas =
       plan.auditAreas;
 
+    scheduledAudit.purpose =
+      plan.purpose || "";
+
     scheduledAudit.location =
       plan.location;
 
@@ -179,6 +182,8 @@ export const scheduleAuditPlan = async (id, scheduleData) => {
     prakalphaPramukh: plan.prakalphaPramukh,
 
     auditAreas: plan.auditAreas,
+
+    purpose: plan.purpose || "",
 
     auditors: plan.auditors,
 
