@@ -9,10 +9,22 @@ export default function DashboardPage() {
 
   const openReports = reports.filter((r) => r.status === "open");
   const closedReports = reports.filter((r) => r.status === "closed");
-  const ncReports = reports.filter((r) => r.severity === "non_conformance");
-  const ofiReports = reports.filter((r) => r.severity === "open_for_improvement");
+
+  const isNC = (report: (typeof reports)[number]) => {
+    const severity = String(report.severity).toLowerCase();
+    return severity === "non_conformance" || severity === "nc";
+  };
+
+  const isOFI = (report: (typeof reports)[number]) => {
+    const severity = String(report.severity).toLowerCase();
+    return severity === "open_for_improvement" || severity === "ofi";
+  };
+  const ncReports = reports.filter(isNC);
+  const ofiReports = reports.filter(isOFI);
+
   const ncOpen = ncReports.filter((r) => r.status === "open");
   const ncClosed = ncReports.filter((r) => r.status === "closed");
+
   const redFlagged = reports.filter(isRedFlagged);
   const overdueNCs = ncOpen.filter(isOverdue);
 

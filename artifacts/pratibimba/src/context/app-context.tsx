@@ -1,4 +1,32 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  ReactNode,
+} from "react";
+import {
+  getAuditPlans,
+  createAuditPlan as createAuditPlanApi,
+  updateAuditPlan as updateAuditPlanApi,
+  deleteAuditPlan as deleteAuditPlanApi,
+  scheduleAudit as scheduleAuditApi,
+} from "../services/auditPlanService";
+
+import {
+  getScheduledAudits,
+  updateScheduledAudit as updateScheduledAuditApi,
+  deleteScheduledAudit as deleteScheduledAuditApi,
+  markMailSent as markMailSentApi,
+} from "../services/scheduledAuditService";
+
+import {
+  getReports,
+  createReport as createReportApi,
+  updateReport as updateReportApi,
+  closeReport as closeReportApi,
+} from "../services/reportService";
 
 // ─── Domain / Location / Sublocation Taxonomy ───────────────────────────────
 
@@ -203,6 +231,9 @@ export interface Report {
   hasChecklist: boolean;
   status: "open" | "closed";
   actionTaken?: string;
+  completionRemarks?: string;
+  closedBy?: string;
+  closedAt?: string;
   iqaReportPdf?: string;
   auditArea?: string;
 }
@@ -385,13 +416,26 @@ interface AppContextType {
   reports: Report[];
   notifications: Notification[];
 
-  createAuditPlan: (data: Omit<AuditPlan, "id" | "iqaNumber" | "createdDate">) => AuditPlan;
+  createAuditPlan: (
+    data: Omit<AuditPlan, "id" | "iqaNumber" | "createdDate">
+  ) => Promise<AuditPlan>;
   updateAuditPlan: (id: string, data: Partial<AuditPlan>) => void;
   deleteAuditPlan: (id: string) => void;
   scheduleAudit: (planId: string, data: Pick<ScheduledAudit, "startDate" | "endDate" | "auditors" | "finalAuditor">) => void;
-  updateScheduledAudit: (id: string, data: Partial<ScheduledAudit>) => void;
+  updateScheduledAudit: (
+    id: string,
+    data: Partial<ScheduledAudit>
+  ) => void;
 
-  createReport: (data: Omit<Report, "id" | "iarNumber" | "iqrNumber" | "createdDate" | "status">) => Report;
+  deleteScheduledAudit: (
+    id: string
+  ) => void;
+
+  markMailSent: (
+    id: string
+  ) => Promise<ScheduledAudit>;
+
+  createReport: (data: Omit<Report, "id" | "iarNumber" | "iqrNumber" | "createdDate" | "status">) => Promise<Report>;
   updateReport: (id: string, data: Partial<Report>) => void;
   addObservationCorrectiveAction: (reportId: string, obsId: string, action: string) => void;
   closeObservation: (reportId: string, obsId: string) => void;
@@ -417,6 +461,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [auditPlans, setAuditPlans] = useState<AuditPlan[]>(seedPlans);
   const [scheduledAudits, setScheduledAudits] = useState<ScheduledAudit[]>(seedScheduled);
   const [reports, setReports] = useState<Report[]>(seedReports);
+  useEffect(() => {
+    const loadLiveData = async () => {
+      try {
+        const [plansResponse, scheduledResponse, reportsResponse] =
+          await Promise.all([
+            getAuditPlans(),
+            getScheduledAudits(),
+            getReports(),
+          ]);
+
+        setAuditPlans(plansResponse.data || plansResponse || []);
+        setScheduledAudits(
+          scheduledResponse.data || scheduledResponse || []
+        );
+        setReports(reportsResponse.data || reportsResponse || []);
+      } catch (error) {
+        console.error("Failed to load live backend data:", error);
+      }
+    };
+
+    loadLiveData();
+  }, []);
   const [notifications, setNotifications] = useState<Notification[]>(seedNotifications);
 
   // Derived lists
@@ -458,55 +524,219 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setNotifications((prev) => [{ ...n, id: `notif-${Date.now()}`, read: false, createdAt: new Date().toISOString().split("T")[0] }, ...prev]);
   }, []);
 
-  const createAuditPlan = useCallback((data: Omit<AuditPlan, "id" | "iqaNumber" | "createdDate">): AuditPlan => {
-    const plan: AuditPlan = { id: `plan-${Date.now()}`, iqaNumber: genIQA(), createdDate: new Date().toISOString().split("T")[0], prakalpa: `${data.domain} — ${data.location}${data.sublocation ? `, ${data.sublocation}` : ""}`, ...data };
-    setAuditPlans((prev) => [plan, ...prev]);
-    return plan;
-  }, []);
+  const createAuditPlan = useCallback(
+    async (
+      data: Omit<AuditPlan, "id" | "iqaNumber" | "createdDate">
+    ): Promise<AuditPlan> => {
+      const response = await createAuditPlanApi(data);
 
-  const updateAuditPlan = useCallback((id: string, data: Partial<AuditPlan>) => {
-    setAuditPlans((prev) => prev.map((p) => p.id === id ? { ...p, ...data } : p));
-  }, []);
-
-  const deleteAuditPlan = useCallback((id: string) => {
-    setAuditPlans((prev) => prev.filter((p) => p.id !== id));
-  }, []);
-
-  const scheduleAudit = useCallback((planId: string, data: Pick<ScheduledAudit, "startDate" | "endDate" | "auditors" | "finalAuditor">) => {
-    setAuditPlans((prev) => {
-      const plan = prev.find((p) => p.id === planId);
-      if (!plan) return prev;
-      const scheduled: ScheduledAudit = {
-        id: `sched-${Date.now()}`,
-        iqaNumber: plan.iqaNumber, domain: plan.domain, location: plan.location, sublocation: plan.sublocation,
-        purpose: plan.purpose, auditPlannedDate: plan.auditPlannedDate, createdDate: plan.createdDate,
-        scheduledDate: new Date().toISOString().split("T")[0], auditCoordinator: plan.auditCoordinator,
-        prakalphaPramukh: plan.prakalphaPramukh, auditAreas: plan.auditAreas,
-        mailSent: true, prakalpa: plan.prakalpa, ...data,
+      const plan: AuditPlan = {
+        ...response,
+        id: response.id || response._id,
+        createdDate:
+          response.createdDate ||
+          response.createdAt ||
+          new Date().toISOString().split("T")[0],
       };
-      setScheduledAudits((s) => [scheduled, ...s]);
+
+      setAuditPlans((prev) => [plan, ...prev]);
+
+      return plan;
+    },
+    []
+  );
+
+  const updateAuditPlan = useCallback(
+    async (
+      id: string,
+      data: Partial<AuditPlan>
+    ): Promise<AuditPlan> => {
+      const response = await updateAuditPlanApi(id, data);
+
+      const updatedPlan: AuditPlan = {
+        ...response,
+        id: response.id || response._id,
+        createdDate:
+          response.createdDate ||
+          response.createdAt ||
+          new Date().toISOString().split("T")[0],
+      };
+
+      setAuditPlans((prev) =>
+        prev.map((p) =>
+          p.id === id ? updatedPlan : p
+        )
+      );
+
+      return updatedPlan;
+    },
+    []
+  );
+
+  const deleteAuditPlan = useCallback(
+    async (id: string): Promise<void> => {
+      const deletedPlan = auditPlans.find((p) => p.id === id);
+
+      await deleteAuditPlanApi(id);
+
+      setAuditPlans((prev) =>
+        prev.filter((p) => p.id !== id)
+      );
+
+      if (deletedPlan) {
+        setScheduledAudits((prev) =>
+          prev.filter(
+            (audit) =>
+              audit.iqaNumber !== deletedPlan.iqaNumber
+          )
+        );
+      }
+    },
+    [auditPlans]
+  );
+
+  const scheduleAudit = useCallback(
+    async (
+      planId: string,
+      data: Pick<
+        ScheduledAudit,
+        "startDate" | "endDate" | "auditors" | "finalAuditor"
+      >
+    ) => {
+      const plan = auditPlans.find((p) => p.id === planId);
+
+      if (!plan) {
+        throw new Error("Audit Plan not found");
+      }
+
+      await scheduleAuditApi(planId, {
+        auditPlannedDate: data.startDate,
+        auditors: data.auditors,
+        auditCoordinator: plan.auditCoordinator,
+      });
+
+      const scheduledAuditsFromApi =
+        await getScheduledAudits();
+
+      setScheduledAudits(scheduledAuditsFromApi);
+
+      setAuditPlans((prev) =>
+        prev.filter((p) => p.id !== planId)
+      );
+
       pushNotification({
         title: "Audit Scheduled — Mail Sent",
-        message: `${plan.iqaNumber} (${plan.domain} — ${plan.location}${plan.sublocation ? `, ${plan.sublocation}` : ""}) scheduled. Mail sent to ${plan.auditCoordinator} and ${plan.auditors.join(", ")}.`,
+        message: `${plan.iqaNumber} (${plan.domain} — ${plan.location}${
+          plan.sublocation ? `, ${plan.sublocation}` : ""
+        }) scheduled. Mail sent to ${plan.auditCoordinator} and ${plan.auditors.join(
+          ", "
+        )}.`,
         type: "mail",
       });
-      return prev.filter((p) => p.id !== planId);
-    });
-  }, [pushNotification]);
+    },
+    [auditPlans, pushNotification]
+  );
+  const updateScheduledAudit = useCallback(
+    async (
+      id: string,
+      data: Partial<ScheduledAudit>
+    ): Promise<ScheduledAudit> => {
+      const response = await updateScheduledAuditApi(id, data);
 
-  const updateScheduledAudit = useCallback((id: string, data: Partial<ScheduledAudit>) => {
-    setScheduledAudits((prev) => prev.map((s) => s.id === id ? { ...s, ...data } : s));
-  }, []);
+      const updatedAudit: ScheduledAudit = {
+        ...response,
+        id: response.id || response._id,
+      };
 
-  const createReport = useCallback((data: Omit<Report, "id" | "iarNumber" | "iqrNumber" | "createdDate" | "status">): Report => {
-    const report: Report = { id: `rep-${Date.now()}`, iarNumber: genIAR(), iqrNumber: genIQR(), createdDate: new Date().toISOString().split("T")[0], status: "open", prakalpa: `${data.domain} — ${data.location}`, ...data };
-    setReports((prev) => [report, ...prev]);
-    return report;
-  }, []);
+      setScheduledAudits((prev) =>
+        prev.map((audit) =>
+          audit.id === id ? updatedAudit : audit
+        )
+      );
 
-  const updateReport = useCallback((id: string, data: Partial<Report>) => {
-    setReports((prev) => prev.map((r) => r.id === id ? { ...r, ...data } : r));
-  }, []);
+      return updatedAudit;
+    },
+    []
+  );
+
+  const deleteScheduledAudit = useCallback(
+    async (id: string): Promise<void> => {
+      await deleteScheduledAuditApi(id);
+
+      setScheduledAudits((prev) =>
+        prev.filter((audit) => audit.id !== id)
+      );
+    },
+    []
+  );
+
+  const markMailSent = useCallback(
+    async (id: string): Promise<ScheduledAudit> => {
+      const response = await markMailSentApi(id);
+
+      const updatedAudit: ScheduledAudit = {
+        ...response,
+        id: response.id || response._id,
+      };
+
+      setScheduledAudits((prev) =>
+        prev.map((audit) =>
+          audit.id === id ? updatedAudit : audit
+        )
+      );
+
+      return updatedAudit;
+    },
+    []
+  );
+
+  const createReport = useCallback(
+    async (
+      data: Omit<
+        Report,
+        "id" | "iarNumber" | "iqrNumber" | "createdDate" | "status"
+      >
+    ): Promise<Report> => {
+      const response = await createReportApi(data);
+
+      const report: Report = {
+        ...response,
+        id: response.id || response._id,
+        createdDate:
+          response.createdDate ||
+          response.createdAt ||
+          new Date().toISOString().split("T")[0],
+      };
+
+      setReports((prev) => [report, ...prev]);
+
+      return report;
+    },
+    []
+  );
+
+  const updateReport = useCallback(
+    async (
+      id: string,
+      data: Partial<Report>
+    ): Promise<Report> => {
+      const response = await updateReportApi(id, data);
+
+      const updatedReport: Report = {
+        ...response,
+        id: response.id || response._id,
+      };
+
+      setReports((prev) =>
+        prev.map((report) =>
+          report.id === id ? updatedReport : report
+        )
+      );
+
+      return updatedReport;
+    },
+    []
+  );
 
   const addObservationCorrectiveAction = useCallback((reportId: string, obsId: string, action: string) => {
     setReports((prev) => prev.map((r) => {
@@ -528,18 +758,89 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
-  const addActionTaken = useCallback((id: string, action: string) => {
-    setReports((prev) => prev.map((r) => r.id === id ? { ...r, actionTaken: action } : r));
-  }, []);
+  const addActionTaken = useCallback(
+    async (id: string, action: string): Promise<Report> => {
+      const response = await updateReportApi(id, {
+        actionTaken: action,
+      });
 
-  const closeReport = useCallback((id: string) => {
-    setReports((prev) => prev.map((r) => {
-      if (r.id !== id) return r;
-      const allHaveCA = r.observations.every((o) => o.correctiveAction.trim() !== "");
-      if (!allHaveCA) return r;
-      return { ...r, status: "closed" as const, dateClosed: new Date().toISOString().split("T")[0], observations: r.observations.map((o) => ({ ...o, status: "closed" as const, dateClosed: o.dateClosed || new Date().toISOString().split("T")[0] })) };
-    }));
-  }, []);
+      const updatedReport: Report = {
+        ...response,
+        id: response.id || response._id,
+      };
+
+      setReports((prev) =>
+        prev.map((report) =>
+          report.id === id ? updatedReport : report
+        )
+      );
+
+      return updatedReport;
+    },
+    []
+  );
+
+  const closeReport = useCallback(
+    async (id: string): Promise<Report> => {
+      const report = reports.find((r) => r.id === id);
+
+      if (!report) {
+        throw new Error("Report not found");
+      }
+
+      const allHaveCA = report.observations.every(
+        (o) => o.correctiveAction.trim() !== ""
+      );
+
+      if (!allHaveCA) {
+        throw new Error(
+          "Cannot close report until all observations have corrective actions."
+        );
+      }
+
+      const closedAt = new Date().toISOString();
+
+      const response = await closeReportApi(id, {
+        actionTaken:
+          report.actionTaken ||
+          report.observations
+            .map((o) => o.correctiveAction.trim())
+            .filter(Boolean)
+            .join("; "),
+        completionRemarks: report.completionRemarks || "",
+        closedBy: currentUser?.name || "System Administrator",
+        closedAt,
+        proofFiles: report.proofFiles || [],
+      });
+
+      const closedReport: Report = {
+        ...response,
+        id: response.id || response._id,
+        status: "closed",
+        dateClosed:
+          response.dateClosed ||
+          response.reportClosedOn ||
+          response.closedAt ||
+          closedAt,
+        observations: report.observations.map((o) => ({
+          ...o,
+          status: "closed" as const,
+          dateClosed:
+            o.dateClosed ||
+            new Date().toISOString().split("T")[0],
+        })),
+      };
+
+      setReports((prev) =>
+        prev.map((r) =>
+          r.id === id ? closedReport : r
+        )
+      );
+
+      return closedReport;
+    },
+    [reports, currentUser]
+  );
 
   const markNotificationRead = useCallback((id: string) => {
     setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
@@ -566,7 +867,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       leadAuditorProfiles, updateLeadAuditorProfile,
       rolePermissions, updateRolePermission,
       auditPlans, scheduledAudits, reports, notifications,
-      createAuditPlan, updateAuditPlan, deleteAuditPlan, scheduleAudit, updateScheduledAudit,
+      createAuditPlan,
+      updateAuditPlan,
+      deleteAuditPlan,
+      scheduleAudit,
+      updateScheduledAudit,
+      deleteScheduledAudit,
+      markMailSent,
       createReport, updateReport, addObservationCorrectiveAction, closeObservation, addActionTaken, closeReport,
       markNotificationRead, markAllNotificationsRead,
       getDaysOpen, isRedFlagged, isOverdue, canAutoClose,

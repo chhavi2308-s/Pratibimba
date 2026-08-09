@@ -74,8 +74,8 @@ export const closeReport = async (
 export const updateReport = async (
   id: string,
   data: {
-    findings: string;
-    severity: string;
+    findings?: string;
+    severity?: string;
     actionTaken?: string;
     completionRemarks?: string;
     status?: string;
