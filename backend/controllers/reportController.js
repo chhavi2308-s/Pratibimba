@@ -42,6 +42,23 @@ export const getReportById = asyncHandler(async (req, res) => {
   );
 });
 
+export const downloadReportPDF = asyncHandler(
+  async (req, res) => {
+    const doc =
+      await reportService.generateReportPDF(
+        req.params.id
+      );
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="audit-report-${req.params.id}.pdf"`
+    );
+
+    doc.pipe(res);
+  }
+);
+
 // ==============================
 // Close Report
 // ==============================

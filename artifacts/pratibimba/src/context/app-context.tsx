@@ -28,6 +28,13 @@ import {
   closeReport as closeReportApi,
 } from "../services/reportService";
 
+import { getRoles, updateRole } from "../services/roleService";
+
+import {
+  getUsers,
+  updateUser as updateUserApi,
+} from "../services/userService";
+
 // ─── Domain / Location / Sublocation Taxonomy ───────────────────────────────
 
 export const DOMAINS = [
@@ -140,6 +147,7 @@ export interface AppUser {
   role: Role;
   phone?: string;
   domain?: string; // for prakalpa_manager
+  assignedDomains?: string[];
   active: boolean;
   createdDate: string;
 }
@@ -151,6 +159,7 @@ export interface CurrentUser {
   email: string;
   role: Role;
   domain?: string;
+  assignedDomains?: string[];
 }
 
 export interface Observation {
@@ -395,7 +404,10 @@ interface AppContextType {
   // User management (admin)
   users: AppUser[];
   addUser: (data: Omit<AppUser, "id" | "createdDate">) => AppUser;
-  updateUser: (id: string, data: Partial<AppUser>) => void;
+  updateUser: (
+    id: string,
+    data: Partial<AppUser>
+  ) => Promise<void>;
   deleteUser: (id: string) => void;
 
   // Derived lists (from users)
@@ -407,7 +419,10 @@ interface AppContextType {
   addAuditor: (name: string) => void;
 
   leadAuditorProfiles: LeadAuditorProfile[];
-  updateLeadAuditorProfile: (id: string, data: Partial<LeadAuditorProfile>) => void;
+  updateLeadAuditorProfile: (
+    id: string,
+    data: Partial<LeadAuditorProfile>
+  ) => Promise<void>;
   rolePermissions: Record<Role, RolePermission>;
   updateRolePermission: (role: Role, data: Partial<RolePermission>) => void;
 
@@ -461,28 +476,99 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [auditPlans, setAuditPlans] = useState<AuditPlan[]>(seedPlans);
   const [scheduledAudits, setScheduledAudits] = useState<ScheduledAudit[]>(seedScheduled);
   const [reports, setReports] = useState<Report[]>(seedReports);
+
   useEffect(() => {
     const loadLiveData = async () => {
       try {
-        const [plansResponse, scheduledResponse, reportsResponse] =
-          await Promise.all([
-            getAuditPlans(),
-            getScheduledAudits(),
-            getReports(),
-          ]);
+        const [
+          plansResponse,
+          scheduledResponse,
+          reportsResponse,
+          rolesResponse,
+          usersResponse,
+        ] = await Promise.all([
+          getAuditPlans(),
+          getScheduledAudits(),
+          getReports(),
+          getRoles(),
+          getUsers(),
+        ]);
 
-        setAuditPlans(plansResponse.data || plansResponse || []);
+        setAuditPlans(
+          plansResponse.data || plansResponse || []
+        );
+
         setScheduledAudits(
           scheduledResponse.data || scheduledResponse || []
         );
-        setReports(reportsResponse.data || reportsResponse || []);
-      } catch (error) {
-        console.error("Failed to load live backend data:", error);
+
+        setReports(
+          reportsResponse.data || reportsResponse || []
+        );
+
+        const liveRoles = rolesResponse || [];
+
+        if (liveRoles.length > 0) {
+          const mappedPermissions = liveRoles.reduce(
+            (acc, role) => {
+              acc[role.name as Role] = {
+            role: role.name as Role,
+            ...role.permissions,
+          };
+              return acc;
+            },
+            {} as Record<Role, RolePermission>
+          );
+
+          setRolePermissions((current) => ({
+            ...current,
+            ...mappedPermissions,
+          }));
+        }
+
+        const liveUsers = usersResponse.data || usersResponse || [];
+
+        if (liveUsers.length > 0) {
+          const normalizedUsers: AppUser[] = liveUsers.map(
+              (user: any) => ({
+              ...user,
+              id: user.id || user._id,
+              createdDate:
+                user.createdDate ||
+                user.createdAt ||
+                new Date().toISOString().split("T")[0],
+              assignedDomains: user.assignedDomains || [],
+            })
+          );
+
+          setUsers(normalizedUsers);
+
+          const liveLeadAuditors = normalizedUsers.filter(
+            (user) =>
+              user.role === "lead_auditor" &&
+              user.active
+          );
+
+          setLeadAuditorProfiles(
+            liveLeadAuditors.map((user) => ({
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              domains: user.assignedDomains || [],
+            }))
+          );
+        }
+      }  catch (error) {
+        console.error(
+          "Failed to load live backend data:",
+          error
+        );
       }
     };
 
     loadLiveData();
   }, []);
+
   const [notifications, setNotifications] = useState<Notification[]>(seedNotifications);
 
   // Derived lists
@@ -504,21 +590,114 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return user;
   }, []);
 
-  const updateUser = useCallback((id: string, data: Partial<AppUser>) => {
-    setUsers((prev) => prev.map((u) => u.id === id ? { ...u, ...data } : u));
-  }, []);
+  const updateUser = useCallback(
+  async (id: string, data: Partial<AppUser>): Promise<void> => {
+    try {
+      const response = await updateUserApi(id, data);
+      const updatedUser = response.data || response;
+
+      const normalizedUser: AppUser = {
+        ...updatedUser,
+        id: updatedUser.id || updatedUser._id,
+        createdDate:
+          updatedUser.createdDate ||
+          updatedUser.createdAt ||
+          new Date().toISOString().split("T")[0],
+        assignedDomains: updatedUser.assignedDomains || [],
+      };
+
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === id ? { ...u, ...normalizedUser } : u
+        )
+      );
+
+      if (normalizedUser.role === "lead_auditor") {
+        setLeadAuditorProfiles((prev) =>
+          prev.map((la) =>
+            la.id === id
+              ? {
+                  ...la,
+                  name: normalizedUser.name,
+                  email: normalizedUser.email,
+                  domains: normalizedUser.assignedDomains || [],
+                }
+              : la
+          )
+        );
+      }
+    } catch (error) {
+      console.error(`Failed to update user ${id}:`, error);
+      throw error;
+    }
+  },
+  []
+  );
 
   const deleteUser = useCallback((id: string) => {
     setUsers((prev) => prev.filter((u) => u.id !== id));
   }, []);
 
-  const updateLeadAuditorProfile = useCallback((id: string, data: Partial<LeadAuditorProfile>) => {
-    setLeadAuditorProfiles((prev) => prev.map((la) => la.id === id ? { ...la, ...data } : la));
-  }, []);
+  const updateLeadAuditorProfile = useCallback(
+    async (
+      id: string,
+      data: Partial<LeadAuditorProfile>
+    ): Promise<void> => {
+      if (data.domains === undefined) {
+        return;
+      }
 
-  const updateRolePermission = useCallback((role: Role, data: Partial<RolePermission>) => {
-    setRolePermissions((prev) => ({ ...prev, [role]: { ...prev[role], ...data } }));
-  }, []);
+      await updateUser(id, {
+        assignedDomains: data.domains,
+      });
+    },
+    [updateUser]
+  );
+
+  const updateRolePermission = useCallback(
+  async (role: Role, data: Partial<RolePermission>) => {
+    const currentPermissions = rolePermissions[role];
+
+    if (!currentPermissions) {
+      console.error(`Role permissions not found for ${role}`);
+      return;
+    }
+
+    const updatedPermissions = {
+      ...currentPermissions,
+      ...data,
+    };
+
+    try {
+      const liveRoles = await getRoles();
+
+      const backendRole = liveRoles.find(
+        (item) => item.name === role
+      );
+
+      if (!backendRole) {
+        console.error(`Backend role not found for ${role}`);
+        return;
+      }
+
+      const updatedRole = await updateRole(
+        backendRole._id,
+        updatedPermissions
+      );
+
+      setRolePermissions((prev) => ({
+        ...prev,
+        [role]: updatedRole.permissions,
+      }));
+    } catch (error) {
+      console.error(
+        `Failed to update permissions for ${role}:`,
+        error
+      );
+    }
+  },
+  [rolePermissions]
+  );
 
   const pushNotification = useCallback((n: Omit<Notification, "id" | "read" | "createdAt">) => {
     setNotifications((prev) => [{ ...n, id: `notif-${Date.now()}`, read: false, createdAt: new Date().toISOString().split("T")[0] }, ...prev]);

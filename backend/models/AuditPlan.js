@@ -70,7 +70,7 @@ const auditPlanSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "scheduled"],
+      enum: ["pending", "scheduled", "completed"],
       default: "pending",
     },
   },

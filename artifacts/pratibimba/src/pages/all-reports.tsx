@@ -123,7 +123,6 @@ export default function AllReportsPage() {
   const handleDownload = async (report: Report) => {
     try {
       await downloadReportPDF(report._id);
-      alert(`PDF download for ${report.iqrNumber} will be connected to backend.`);
     } catch (error) {
       console.error(error);
     }

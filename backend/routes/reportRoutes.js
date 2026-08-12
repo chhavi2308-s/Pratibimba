@@ -5,6 +5,7 @@ import authenticate from "../middleware/authMiddleware.js";
 import {
   createReport,
   getReports,
+  downloadReportPDF,
   getReportById,
   closeReport,
   updateReport,
@@ -16,6 +17,12 @@ router.get(
   "/",
   authenticate,
   getReports
+);
+
+router.get(
+  "/:id/pdf",
+  authenticate,
+  downloadReportPDF
 );
 
 router.get(

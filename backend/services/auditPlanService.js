@@ -1,6 +1,55 @@
 import AuditPlan from "../models/AuditPlan.js";
 import ScheduledAudit from "../models/ScheduledAudit.js";
+import Report from "../models/Report.js";
 import AppError from "../utils/AppError.js";
+
+const getNextIqaNumber = async () => {
+  const currentYear = new Date().getFullYear();
+  const pattern = new RegExp(`^IQA-${currentYear}-(\\d{4})$`);
+
+  const [plans, scheduledAudits, reports] = await Promise.all([
+    AuditPlan.find(
+      { iqaNumber: new RegExp(`^IQA-${currentYear}-`) },
+      "iqaNumber"
+    ).lean(),
+
+    ScheduledAudit.find(
+      { iqaNumber: new RegExp(`^IQA-${currentYear}-`) },
+      "iqaNumber"
+    ).lean(),
+
+    Report.find(
+      { iqaNumber: new RegExp(`^IQA-${currentYear}-`) },
+      "iqaNumber"
+    ).lean(),
+  ]);
+
+  let maxNumber = 0;
+
+  const records = [
+    ...plans,
+    ...scheduledAudits,
+    ...reports,
+  ];
+
+  for (const record of records) {
+    if (!record.iqaNumber) continue;
+
+    const match = record.iqaNumber.match(pattern);
+
+    if (!match) continue;
+
+    const number = parseInt(match[1], 10);
+
+    if (number > maxNumber) {
+      maxNumber = number;
+    }
+  }
+
+  const nextNumber = maxNumber + 1;
+
+  return `IQA-${currentYear}-${String(nextNumber).padStart(4, "0")}`;
+};
 
 export const getAuditPlans = async () => {
   return await AuditPlan.find().sort({ createdAt: -1 });
@@ -17,37 +66,7 @@ export const getAuditPlanById = async (id) => {
 };
 
 export const createAuditPlan = async (data) => {
-  const currentYear = new Date().getFullYear();
-
-  // Find all audit plans for the current year
-  const plans = await AuditPlan.find(
-    {
-      iqaNumber: new RegExp(`^IQA-${currentYear}-`)
-    },
-    "iqaNumber"
-  );
-
-  let maxNumber = 0;
-
-  for (const plan of plans) {
-    if (!plan.iqaNumber) continue;
-
-    const match = plan.iqaNumber.match(
-      new RegExp(`^IQA-${currentYear}-(\\d{4})$`)
-    );
-
-    if (match) {
-      const num = parseInt(match[1], 10);
-
-      if (num > maxNumber) {
-        maxNumber = num;
-      }
-    }
-  }
-
-  const nextNumber = maxNumber + 1;
-
-  const iqaNumber = `IQA-${currentYear}-${String(nextNumber).padStart(4, "0")}`;
+  const iqaNumber = await getNextIqaNumber();
 
   const auditPlan = await AuditPlan.create({
     ...data,
@@ -58,7 +77,6 @@ export const createAuditPlan = async (data) => {
 };
 
 export const updateAuditPlan = async (id, data) => {
-
   const plan = await AuditPlan.findById(id);
 
   if (!plan) {
@@ -75,42 +93,24 @@ export const updateAuditPlan = async (id, data) => {
   });
 
   if (scheduledAudit) {
-
     scheduledAudit.startDate = plan.auditPlannedDate;
 
-    if (
-      scheduledAudit.endDate <
-      scheduledAudit.startDate
-    ) {
+    if (scheduledAudit.endDate < scheduledAudit.startDate) {
       scheduledAudit.endDate = plan.auditPlannedDate;
     }
 
-    scheduledAudit.auditCoordinator =
-      plan.auditCoordinator;
-
-    scheduledAudit.auditors =
-      plan.auditors;
-
-    scheduledAudit.auditAreas =
-      plan.auditAreas;
-
-    scheduledAudit.purpose =
-      plan.purpose || "";
-
-    scheduledAudit.location =
-      plan.location;
-
-    scheduledAudit.sublocation =
-      plan.sublocation;
-
-    scheduledAudit.prakalphaPramukh =
-      plan.prakalphaPramukh;
+    scheduledAudit.auditCoordinator = plan.auditCoordinator;
+    scheduledAudit.auditors = plan.auditors;
+    scheduledAudit.auditAreas = plan.auditAreas;
+    scheduledAudit.purpose = plan.purpose || "";
+    scheduledAudit.location = plan.location;
+    scheduledAudit.sublocation = plan.sublocation;
+    scheduledAudit.prakalphaPramukh = plan.prakalphaPramukh;
 
     await scheduledAudit.save();
   }
 
   return await AuditPlan.findById(plan._id);
-
 };
 
 export const deleteAuditPlan = async (id) => {
@@ -120,12 +120,15 @@ export const deleteAuditPlan = async (id) => {
     throw new AppError("Audit Plan not found", 404);
   }
 
-  // Delete corresponding Scheduled Audit
-  await ScheduledAudit.deleteOne({
-    auditPlan: plan._id,
-  });
+  // Only delete a plan that has not entered the audit lifecycle.
+  // Once scheduled, the plan must remain as historical audit data.
+  if (plan.status === "scheduled") {
+    throw new AppError(
+      "A scheduled audit cannot be deleted from the audit lifecycle.",
+      400
+    );
+  }
 
-  // Delete Audit Plan
   await ScheduledAudit.deleteOne({
     auditPlan: plan._id,
   });
@@ -134,15 +137,14 @@ export const deleteAuditPlan = async (id) => {
 
   return;
 };
-export const scheduleAuditPlan = async (id, scheduleData) => {
 
+export const scheduleAuditPlan = async (id, scheduleData) => {
   const plan = await AuditPlan.findById(id);
 
   if (!plan) {
     throw new AppError("Audit Plan not found", 404);
   }
 
-  // Update Audit Plan
   if (scheduleData.auditPlannedDate) {
     plan.auditPlannedDate = scheduleData.auditPlannedDate;
   }
@@ -159,64 +161,36 @@ export const scheduleAuditPlan = async (id, scheduleData) => {
 
   await plan.save();
 
-  // Check if Scheduled Audit already exists
   let scheduledAudit = await ScheduledAudit.findOne({
     auditPlan: plan._id,
   });
 
   const scheduledAuditData = {
     auditPlan: plan._id,
-
     iqaNumber: plan.iqaNumber,
-
     domain: plan.domain,
-
     location: plan.location,
-
     sublocation: plan.sublocation,
-
     prakalpa: plan.prakalpa,
-
     auditCoordinator: plan.auditCoordinator,
-
     prakalphaPramukh: plan.prakalphaPramukh,
-
     auditAreas: plan.auditAreas,
-
     purpose: plan.purpose || "",
-
     auditors: plan.auditors,
-
     finalAuditor:
-      plan.auditors.length > 0
-        ? plan.auditors[0]
-        : "",
-
+      plan.auditors.length > 0 ? plan.auditors[0] : "",
     startDate: plan.auditPlannedDate,
-
     endDate: plan.auditPlannedDate,
-
     mailSent: false,
   };
 
   if (scheduledAudit) {
-
-    Object.assign(
-      scheduledAudit,
-      scheduledAuditData
-    );
-
+    Object.assign(scheduledAudit, scheduledAuditData);
     await scheduledAudit.save();
-
   } else {
-
-    scheduledAudit = new ScheduledAudit(
-      scheduledAuditData
-    );
-
+    scheduledAudit = new ScheduledAudit(scheduledAuditData);
     await scheduledAudit.save();
   }
 
   return await AuditPlan.findById(plan._id);
-
 };

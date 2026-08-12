@@ -48,6 +48,11 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    assignedDomains: {
+    type: [String],
+    default: [],
+    },
+
     active: {
       type: Boolean,
       default: true,

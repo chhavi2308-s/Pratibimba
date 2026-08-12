@@ -36,16 +36,28 @@ export const sendReportEmail = async (id: string) => {
 };
 
 export const downloadReportPDF = async (id: string) => {
-  // Future backend endpoint
-  // return await api.get(`/reports/${id}/pdf`, {
-  //   responseType: "blob",
-  // });
+  const response = await api.get(`/reports/${id}/pdf`, {
+    responseType: "blob",
+  });
 
-  console.log("Download Report PDF:", id);
+  const blob = new Blob([response.data], {
+    type: "application/pdf",
+  });
+
+  const url = window.URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `audit-report-${id}.pdf`;
+
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  window.URL.revokeObjectURL(url);
 
   return {
     success: true,
-    message: "PDF functionality not connected yet.",
   };
 };
 
