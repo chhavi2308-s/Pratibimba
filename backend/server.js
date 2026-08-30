@@ -45,19 +45,20 @@ app.use(helmet());
 // value, so it works for local dev AND for whichever Codespace forwards
 // the frontend on a given run.
 const allowedOrigins = [
-  process.env.FRONTEND_URL,
+  process.env.ALLOWED_ORIGIN,
   "http://localhost:5173",
 ].filter(Boolean);
 
 app.use(
   cors({
     origin(origin, callback) {
-      // No Origin header at all (curl, Postman, server-to-server) — not
-      // subject to CORS in the first place, so allow it through.
+      // Requests without an Origin header (curl/Postman/server-to-server)
+      // are not subject to browser CORS checks.
       if (!origin) return callback(null, true);
 
       let isAllowed = allowedOrigins.includes(origin);
 
+      // Keep GitHub Codespaces working during development.
       if (!isAllowed) {
         try {
           isAllowed = new URL(origin).hostname.endsWith(".app.github.dev");
@@ -66,7 +67,10 @@ app.use(
         }
       }
 
-      callback(isAllowed ? null : new Error("Not allowed by CORS"), isAllowed);
+      callback(
+        isAllowed ? null : new Error("Not allowed by CORS"),
+        isAllowed
+      );
     },
     credentials: true,
   })

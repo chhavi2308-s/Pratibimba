@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link } from "wouter";
 
-const API_URL =
-  "https://bug-free-eureka-r4jrjvp4ppjxfwqp5-5000.app.github.dev/api/v1/auth/login";
+const API_URL = `${
+  import.meta.env.VITE_API_URL || "http://localhost:5000/api/v1"
+}/auth/login`;
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
