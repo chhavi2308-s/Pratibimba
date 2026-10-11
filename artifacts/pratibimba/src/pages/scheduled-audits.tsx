@@ -1,5 +1,7 @@
 import { FilterToolbar } from "../components/filters/filter-toolbar";
 import { FilterSelect } from "../components/filters/filter-select";
+import { FilterDate } from "../components/filters/filter-date";
+import { matchesDateFilter, type DateFilter } from "../components/filters/date-filter-utils";
 import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 
@@ -108,6 +110,10 @@ const [editAuditors, setEditAuditors] =
   const [filterAuditor, setFilterAuditor] =
     useState("All");
 
+  const [filterSublocation, setFilterSublocation] = useState("All");
+  const [filterAuditArea, setFilterAuditArea] = useState("All");
+  const [filterPramukh, setFilterPramukh] = useState("All");
+  const [filterDate, setFilterDate] = useState<DateFilter>({ mode: "all", start: "", end: "" });
   const [filterStatus, setFilterStatus] =
     useState("All");
 
@@ -648,6 +654,10 @@ const [editAuditors, setEditAuditors] =
           (filterCoordinator === "All" ||
             s.auditCoordinator ===
               filterCoordinator) &&
+          (filterSublocation === "All" || s.sublocation === filterSublocation) &&
+          (filterAuditArea === "All" || (s.auditAreas || []).includes(filterAuditArea)) &&
+          (filterPramukh === "All" || s.prakalphaPramukh === filterPramukh) &&
+          matchesDateFilter(s.startDate, s.endDate, filterDate) &&
           matchUser
         );
       }),
@@ -659,6 +669,10 @@ const [editAuditors, setEditAuditors] =
       filterAuditor,
       filterStatus,
       filterCoordinator,
+      filterSublocation,
+      filterAuditArea,
+      filterPramukh,
+      filterDate,
       isAuditor,
       currentUser,
     ]
@@ -913,14 +927,22 @@ setEditAuditors([]);
             ...(filterLocation !== "All" ? [{ key: "filterLocation", label: "Location", value: filterLocation, onRemove: () => setFilterLocation("All") }] : []),
             ...(!isAuditor && filterAuditor !== "All" ? [{ key: "filterAuditor", label: "Auditor", value: filterAuditor, onRemove: () => setFilterAuditor("All") }] : []),
             ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : []),
-            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : [])
+            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : []),
+            ...(filterSublocation !== "All" ? [{ key: "sublocation", label: "Sublocation", value: filterSublocation, onRemove: () => setFilterSublocation("All") }] : []),
+            ...(filterAuditArea !== "All" ? [{ key: "auditArea", label: "Audit Area", value: filterAuditArea, onRemove: () => setFilterAuditArea("All") }] : []),
+            ...(filterPramukh !== "All" ? [{ key: "pramukh", label: "Pramukh", value: filterPramukh, onRemove: () => setFilterPramukh("All") }] : []),
+            ...(filterDate.mode !== "all" && filterDate.start ? [{ key: "date", label: "Scheduled Date", value: filterDate.mode === "range" ? `${filterDate.start} to ${filterDate.end || "…"}` : `${filterDate.mode}: ${filterDate.start}`, onRemove: () => setFilterDate({ mode: "all", start: "", end: "" }) }] : [])
           ]}
-          onClearAll={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterAuditor("All"); setFilterStatus("All"); setFilterCoordinator("All"); }} resultCount={filtered.length} resultLabel="audits shown">
+          onClearAll={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterAuditor("All"); setFilterStatus("All"); setFilterCoordinator("All"); setFilterSublocation("All"); setFilterAuditArea("All"); setFilterPramukh("All"); setFilterDate({ mode: "all", start: "", end: "" }); }} resultCount={filtered.length} resultLabel="audits shown">
           <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={filterPrakalpaOptions.map(value => ({ value, label: value }))} searchable allLabel="All Prakalpas" />
-          <FilterSelect label="Location" value={filterLocation} onChange={setFilterLocation} options={[...new Set(filterAudits.map(s => s.location).filter(Boolean))].map(value => ({ value, label: value }))} searchable allLabel="All Locations" />
+          <FilterSelect label="Location" value={filterLocation} onChange={setFilterLocation} options={[...new Set(filterAudits.map(s => s.location).filter((value): value is string => typeof value === "string" && value.length > 0))].map(value => ({ value, label: value }))} searchable allLabel="All Locations" />
           {!isAuditor && <FilterSelect label="Auditor" value={filterAuditor} onChange={setFilterAuditor} options={auditors.map(value => ({ value, label: value }))} searchable allLabel="All Auditors" />}
           <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus} options={[{ value: "Upcoming", label: "Upcoming" }, { value: "Ongoing", label: "Ongoing" }, { value: "Completed", label: "Completed" }]} allLabel="All Statuses" />
           <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={filterCoordinatorOptions.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
+          <FilterSelect label="Sublocation" value={filterSublocation} onChange={setFilterSublocation} options={[...new Set(filterAudits.map(s => s.sublocation).filter((value): value is string => typeof value === "string" && value.length > 0))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Audit Area" value={filterAuditArea} onChange={setFilterAuditArea} options={[...new Set(filterAudits.flatMap(s => s.auditAreas || []))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Pramukh" value={filterPramukh} onChange={setFilterPramukh} options={[...new Set(filterAudits.map(s => s.prakalphaPramukh).filter((value): value is string => typeof value === "string" && value.length > 0))].map(value => ({ value, label: value }))} searchable />
+          <FilterDate label="Scheduled Date" value={filterDate} onChange={setFilterDate} />
         </FilterToolbar>
 
       {/* Table */}

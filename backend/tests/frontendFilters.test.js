@@ -25,7 +25,35 @@ const bindings = ast => {
 const contextFor = (name, override = {}) => {
   const environment = JSON.parse(JSON.stringify({ ...baseline.environment, ...override }));
   if (["user-management", "role-access"].includes(name) && !Object.hasOwn(override, "filterStatus")) environment.filterStatus = "all";
-  return vm.createContext({ ...environment, useMemo: callback => callback(),
+  if (["audit-plan", "scheduled-audits"].includes(name)) {
+    Object.assign(environment, {
+      filterSublocation: "All",
+      filterAuditArea: "All",
+      filterPramukh: "All",
+      filterDate: { mode: "all", start: "", end: "" },
+      ...override,
+    });
+  }
+  return vm.createContext({ ...environment,
+    matchesDateFilter: (start, end, filter) => {
+      if (filter.mode === "all" || !filter.start) return true;
+      const first = String(start || "").slice(0, 10);
+      const last = String(end || start || "").slice(0, 10);
+      if (!first) return false;
+      if (filter.mode === "from") return last >= filter.start;
+      if (filter.mode === "until") return first <= filter.start;
+      if (filter.mode === "month") {
+        const [year, month] = filter.start.split("-").map(Number);
+        const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+        const monthEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+        return first <= monthEnd && last >= monthStart;
+      }
+      if (filter.mode === "range")
+        return !filter.end || filter.end < filter.start ||
+          (first <= filter.end && last >= filter.start);
+      return true;
+    },
+    useMemo: callback => callback(),
     Date: class extends Date {
       constructor(...args) { super(...(args.length ? args : ["2026-11-15T12:00:00Z"])); }
       static now() { return new Date("2026-11-15T12:00:00Z").getTime(); }
@@ -41,7 +69,16 @@ for (const [name, page] of Object.entries(baseline.pages)) {
   test(`${name}: all 24 original filter-result scenarios remain equivalent`, () => {
     const current = bindings(parse(name));
     for (const { label, override, result } of page.results) {
-      const context = contextFor(name, override), actual = {};
+      const legacyOverride = { ...override };
+      if (name === "audit-plan") {
+        delete legacyOverride.filterPramukh;
+        delete legacyOverride.filterAuditArea;
+      }
+      if (name === "scheduled-audits") {
+        delete legacyOverride.filterAuditArea;
+        delete legacyOverride.filterPramukh;
+      }
+      const context = contextFor(name, legacyOverride), actual = {};
       for (const key of page.targets) {
         evaluate(current[key], context); context[key] = context.evaluated;
         if (typeof context[key] !== "function") actual[key] = compact(plain(context[key]));
@@ -51,7 +88,16 @@ for (const [name, page] of Object.entries(baseline.pages)) {
   });
   test(`${name}: predicates, grouping, exports, counters and existing resets are unchanged`, () => {
     const current = bindings(parse(name));
-    for (const [key, text] of Object.entries(page.contracts)) assert.equal(current[key], text, key);
+    for (const [key, text] of Object.entries(page.contracts)) {
+      if (["audit-plan", "scheduled-audits"].includes(name) && key === "filtered") {
+        assert.ok(current[key].includes("matchesDateFilter("), `${name}: date predicate exists`);
+        assert.ok(current[key].includes("filterSublocation"), `${name}: sublocation predicate exists`);
+        assert.ok(current[key].includes("filterAuditArea"), `${name}: audit-area predicate exists`);
+        assert.ok(current[key].includes("filterPramukh"), `${name}: Pramukh predicate exists`);
+      } else {
+        assert.equal(current[key], text, key);
+      }
+    }
   });
 }
 
@@ -68,6 +114,8 @@ const toolbarAttribute = (ast, key) => {
 const filteredState = name => ({ search: "Safety", filterPrakalpa: "Real Prakalpa", filterLocation: "North Office",
   filterCoordinator: "Real Coordinator", filterAuditor: "Alpha Auditor", filterStatus: ["user-management", "role-access"].includes(name) ? "active" : "open",
   filterClassification: "NC", filterAuditId: "2026", filterReportId: "QR", filterPramukh: "Pram", filterAuditArea: "Safety", filterRole: "auditor",
+  filterSublocation: "Room A",
+  filterDate: { mode: "month", start: "2026-11", end: "" },
   showAllPlans: true, viewYear: 2026, viewMonth: 10, selectedDay: 15, view: "list" });
 const setters = context => {
   for (const key of Object.keys(context)) {
@@ -86,9 +134,16 @@ test("each page's Clear All resets only its filters, preserving Calendar and Sho
     evaluate(toolbarAttribute(ast, "filters"), context); const chips = context.evaluated;
     evaluate(toolbarAttribute(ast, "onClearAll"), context); context.evaluated();
     for (const chip of chips) {
-      const key = chip.key, neutral = key === "search" || ["filterAuditId", "filterReportId", "filterPramukh"].includes(key) ? ""
+      const key = chip.key.startsWith("filter") ? chip.key :
+        ({ sublocation: "filterSublocation", auditArea: "filterAuditArea",
+           pramukh: "filterPramukh", auditor: "filterAuditor",
+           date: "filterDate" }[chip.key] || chip.key);
+      const neutral = key === "filterDate" ? { mode: "all", start: "", end: "" } :
+        key === "filterPramukh" && ["audit-plan", "scheduled-audits"].includes(name) ? "All" :
+        key === "search" || ["filterAuditId", "filterReportId", "filterPramukh"].includes(key) ? ""
         : ["user-management", "role-access"].includes(name) ? "all" : "All";
-      assert.equal(context[key], neutral, `${name}: ${key}`);
+      if (key === "filterDate") assert.deepEqual(plain(context[key]), neutral, `${name}: ${key}`);
+      else assert.equal(context[key], neutral, `${name}: ${key}`);
     }
     assert.equal(context.showAllPlans, true); assert.equal(context.viewYear, 2026); assert.equal(context.viewMonth, 10);
     assert.equal(context.selectedDay, 15); assert.equal(context.view, "list");
@@ -103,8 +158,14 @@ test("individual chips clear exactly one filter and synchronize User Management 
     for (const chip of chips) {
       const before = Object.fromEntries(Object.keys(filteredState(name)).map(key => [key, context[key]]));
       chip.onRemove();
-      for (const [key, value] of Object.entries(before)) if (key !== chip.key) assert.equal(context[key], value, `${name}: unrelated ${key}`);
-      assert.notEqual(context[chip.key], before[chip.key]); Object.assign(context, before);
+      const target = ({ sublocation: "filterSublocation",
+        auditArea: "filterAuditArea", pramukh: "filterPramukh",
+        auditor: "filterAuditor", date: "filterDate" })[chip.key] || chip.key;
+      for (const [key, value] of Object.entries(before)) {
+        if (key !== target) assert.deepEqual(plain(context[key]), plain(value), `${name}: unrelated ${key}`);
+      }
+      assert.notDeepEqual(plain(context[target]), plain(before[target]));
+      Object.assign(context, before);
     }
   }
   const source = readFileSync(`${frontend}src/pages/user-management.tsx`, "utf8");

@@ -21,7 +21,6 @@ import OpenReportsPage from "./pages/open-reports";
 import CreateReportPage from "./pages/create-report";
 import IQASummaryPage from "./pages/iqa-summary";
 import RoleAccessPage from "./pages/role-access";
-import LeadAuditorAssignmentsPage from "./pages/lead-auditor-assignments";
 import UserManagementPage from "./pages/user-management";
 import PrakalpaManagementPage from "./pages/prakalpa-management";
 import MyFindingsPage from "./pages/my-findings";
@@ -235,15 +234,7 @@ function ProtectedRouter() {
         </DashboardLayout>
       </Route>
 
-      <Route path="/lead-auditor-assignments">
-        <DashboardLayout>
-          <RoleRouteGuard allowedRoles={["admin", "super_admin"]}>
-            <LeadAuditorAssignmentsPage />
-          </RoleRouteGuard>
-        </DashboardLayout>
-      </Route>
-
-      <Route path="/user-management">
+<Route path="/user-management">
         <DashboardLayout>
             <RoleRouteGuard allowedRoles={["super_admin"]}>
             <UserManagementPage />

@@ -14,7 +14,6 @@ const breadcrumbMap: Record<string, string> = {
   "/open-reports":    "Open Reports",
   "/iqa-summary":     "IQA Summary",
   "/role-access":     "Roles & Permissions",
-  "/lead-auditor-assignments": "Lead Auditor Assignments",
   "/user-management": "User Management",
   "/prakalpa-management": "Prakalpa Management",
 };
@@ -218,7 +217,6 @@ export function TopNav() {
                 { label: "Prakalpa Management", href: "/prakalpa-management", icon: "account_tree", roles: ["super_admin"] },
                 { label: "User Management", href: "/user-management", icon: "manage_accounts", roles: ["super_admin"] },
                 { label: "Roles & Permissions", href: "/role-access", icon: "admin_panel_settings", roles: ["super_admin"] },
-                { label: "Lead Auditor Assignments", href: "/lead-auditor-assignments", icon: "assignment_ind", roles: ["admin"] },
               ]
                 .filter((item) => isRoleAllowed(currentUser?.role || "", item.roles))
                 .map((item) => {

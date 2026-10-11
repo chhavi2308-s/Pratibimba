@@ -124,12 +124,6 @@ const navItems: NavItem[] = [
     icon: "admin_panel_settings",
     roles: ["super_admin"],
   },
-  {
-    label: "Lead Auditor Assignments",
-    href: "/lead-auditor-assignments",
-    icon: "assignment_ind",
-    roles: ["admin"],
-  },
 ];
 
 export const ROLE_LABELS: Record<string, string> = {

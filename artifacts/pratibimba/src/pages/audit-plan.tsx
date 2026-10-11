@@ -1,5 +1,7 @@
 import { FilterToolbar } from "../components/filters/filter-toolbar";
 import { FilterSelect } from "../components/filters/filter-select";
+import { FilterDate } from "../components/filters/filter-date";
+import { matchesDateFilter, type DateFilter } from "../components/filters/date-filter-utils";
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { useApp, type AuditPlan } from "../context/app-context";
@@ -490,6 +492,11 @@ export default function AuditPlanPage() {
   const [filterPrakalpa, setFilterPrakalpa] = useState("All");
   const [filterLocation, setFilterLocation] = useState("All");
   const [filterCoordinator, setFilterCoordinator] = useState("All");
+  const [filterSublocation, setFilterSublocation] = useState("All");
+  const [filterAuditArea, setFilterAuditArea] = useState("All");
+  const [filterPramukh, setFilterPramukh] = useState("All");
+  const [filterAuditor, setFilterAuditor] = useState("All");
+  const [filterDate, setFilterDate] = useState<DateFilter>({ mode: "all", start: "", end: "" });
   const [filterStatus, setFilterStatus] = useState("All");
 
   const [showAllPlans, setShowAllPlans] =
@@ -522,8 +529,12 @@ export default function AuditPlanPage() {
             p.location === filterLocation) &&
           (filterCoordinator === "All" ||
             p.auditCoordinator === filterCoordinator) &&
-          (filterStatus === "All" ||
-            p.status === filterStatus);
+          (filterStatus === "All" || p.status === filterStatus) &&
+          (filterSublocation === "All" || p.sublocation === filterSublocation) &&
+          (filterAuditArea === "All" || (p.auditAreas || []).includes(filterAuditArea)) &&
+          (filterPramukh === "All" || p.prakalphaPramukh === filterPramukh) &&
+          (filterAuditor === "All" || (p.auditors || []).includes(filterAuditor)) &&
+          matchesDateFilter(p.auditPlannedDate, undefined, filterDate);
 
         // Default view = active Audit Plans only.
         // Show All = include completed/older records too.
@@ -551,6 +562,11 @@ export default function AuditPlanPage() {
     filterLocation,
     filterCoordinator,
     filterStatus,
+    filterSublocation,
+    filterAuditArea,
+    filterPramukh,
+    filterAuditor,
+    filterDate,
     showAllPlans,
   ]);
 
@@ -586,13 +602,23 @@ export default function AuditPlanPage() {
             ...(filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : []),
             ...(filterLocation !== "All" ? [{ key: "filterLocation", label: "Location", value: filterLocation, onRemove: () => setFilterLocation("All") }] : []),
             ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : []),
-            ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : [])
+            ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : []),
+            ...(filterSublocation !== "All" ? [{ key: "sublocation", label: "Sublocation", value: filterSublocation, onRemove: () => setFilterSublocation("All") }] : []),
+            ...(filterAuditArea !== "All" ? [{ key: "auditArea", label: "Audit Area", value: filterAuditArea, onRemove: () => setFilterAuditArea("All") }] : []),
+            ...(filterPramukh !== "All" ? [{ key: "pramukh", label: "Pramukh", value: filterPramukh, onRemove: () => setFilterPramukh("All") }] : []),
+            ...(filterAuditor !== "All" ? [{ key: "auditor", label: "Auditor", value: filterAuditor, onRemove: () => setFilterAuditor("All") }] : []),
+            ...(filterDate.mode !== "all" && filterDate.start ? [{ key: "date", label: "Planned Date", value: filterDate.mode === "range" ? `${filterDate.start} to ${filterDate.end || "…"}` : `${filterDate.mode}: ${filterDate.start}`, onRemove: () => setFilterDate({ mode: "all", start: "", end: "" }) }] : [])
           ]}
-          onClearAll={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterCoordinator("All"); setFilterStatus("All"); }} resultCount={filtered.length} resultLabel="plans shown">
+          onClearAll={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterCoordinator("All"); setFilterStatus("All"); setFilterSublocation("All"); setFilterAuditArea("All"); setFilterPramukh("All"); setFilterAuditor("All"); setFilterDate({ mode: "all", start: "", end: "" }); }} resultCount={filtered.length} resultLabel="plans shown">
           <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={prakalpas.filter(p => p.active !== false).map(p => ({ value: p.name, label: p.name }))} searchable allLabel="All Prakalpas" />
           <FilterSelect label="Location" value={filterLocation} onChange={setFilterLocation} options={allLocations.map(value => ({ value, label: value }))} searchable allLabel="All Locations" />
           <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={coordinatorNames.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
           <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus} options={[{ value: "pending", label: "Pending" }, { value: "scheduled", label: "Scheduled" }, { value: "completed", label: "Completed" }]} allLabel="All Statuses" />
+          <FilterSelect label="Sublocation" value={filterSublocation} onChange={setFilterSublocation} options={[...new Set(auditPlans.map(p => p.sublocation).filter((value): value is string => typeof value === "string" && value.length > 0))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Audit Area" value={filterAuditArea} onChange={setFilterAuditArea} options={[...new Set(auditPlans.flatMap(p => p.auditAreas || []))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Pramukh" value={filterPramukh} onChange={setFilterPramukh} options={[...new Set(auditPlans.map(p => p.prakalphaPramukh).filter((value): value is string => typeof value === "string" && value.length > 0))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Auditor" value={filterAuditor} onChange={setFilterAuditor} options={[...new Set(auditPlans.flatMap(p => p.auditors || []))].map(value => ({ value, label: value }))} searchable />
+          <FilterDate label="Planned Date" value={filterDate} onChange={setFilterDate} />
         </FilterToolbar>
 
       {/* Audit plan visibility */}
