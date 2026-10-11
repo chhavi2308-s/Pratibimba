@@ -1,3 +1,6 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
+import { FilterText } from "../components/filters/filter-text";
 import {
   useState,
   useMemo,
@@ -15,6 +18,7 @@ import {
   returnReportToPrakalpa,
   verifyAndCloseReport,
   sendReportToPrakalpa,
+  downloadReportActionProof,
 } from "../services/reportService";
 
 // Step 5: Updated Report Interface
@@ -32,6 +36,7 @@ interface Report {
   severity: "non_conformance" | "open_for_improvement";
   findings: string;
   proofFiles: string[];
+  actionProofFiles?: string[];
   hasChecklist: boolean;
   createdAt: string;
   updatedAt?: string;
@@ -90,6 +95,23 @@ function downloadCSV(reports: Report[]) {
   a.download = `AllReports_${new Date().toISOString().split("T")[0]}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Calendar-day age, using India-local dates (not elapsed 24-hour periods).
+// Null means that no reliable start date was supplied.
+function reportDaysOpen(start?: string | null, end?: string | null): number | null {
+  if (!start) return null;
+  const first = new Date(start);
+  const last = end ? new Date(end) : new Date();
+  if (!Number.isFinite(first.getTime()) || !Number.isFinite(last.getTime())) return null;
+  const calendarDay = (date: Date) => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(date);
+    const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    return Date.UTC(part("year"), part("month") - 1, part("day"));
+  };
+  return Math.max(0, Math.round((calendarDay(last) - calendarDay(first)) / 86400000));
 }
 
 export default function AllReportsPage() {
@@ -151,13 +173,14 @@ export default function AllReportsPage() {
   };
 
   const handleEditReport = (report: Report) => {
+    if (currentUser.role !== "audit_coordinator" || report.workflowStatus === "verified_closed") return;
     setEditTarget(report);
     setEditFindings(report.findings || "");
     setEditSeverity(report.severity || "open_for_improvement");
   };
 
   const handleSaveEdit = async () => {
-    if (!editTarget) return;
+    if (!editTarget || currentUser.role !== "audit_coordinator") return;
 
     setSavingEdit(true);
     try {
@@ -319,6 +342,12 @@ export default function AllReportsPage() {
     }
   };
 
+  const filterReports = useMemo(() => reports.filter(r =>
+    (isManager ? r.prakalpa === currentUser.prakalpa : isAuditor ? (r.auditors || []).includes(currentUser.name || "") || r.auditor === currentUser.name : true)
+  ), [reports, isManager, isAuditor, currentUser]);
+  const filterPrakalpaOptions = useMemo(() => [...new Set(filterReports.map(r => r.prakalpa).filter(Boolean))], [filterReports]);
+  const filterCoordinatorOptions = useMemo(() => [...new Set(filterReports.map(r => r.auditCoordinator).filter(Boolean))], [filterReports]);
+
   const filtered = useMemo(() => {
     return reports.filter((r) => {
       const q = search.toLowerCase();
@@ -415,9 +444,7 @@ export default function AllReportsPage() {
         (r.status ?? "open") === "closed" && (r.reportClosedOn || r.closedAt)
           ? new Date(r.reportClosedOn || r.closedAt!)
           : new Date();
-      const daysOpen = Math.floor(
-        (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
-      );
+      const daysOpen = reportDaysOpen(Number.isFinite(startDate.getTime()) ? startDate.toISOString() : null, Number.isFinite(endDate.getTime()) ? endDate.toISOString() : null) ?? 0;
       return (r.status ?? "open") === "open" && daysOpen > 30;
     }).length;
   }, [filtered]);
@@ -511,90 +538,24 @@ export default function AllReportsPage() {
       )}
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-outline-variant/20 shadow-soft space-y-3">
-        <div className="flex flex-wrap gap-3 items-center">
-          <div className="relative w-full sm:flex-1 sm:min-w-[180px]">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">
-              search
-            </span>
-            <input
-              type="text"
-              placeholder="Search reports..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest"
-            />
-          </div>
-          <input
-            type="text"
-            placeholder="Audit ID"
-            value={filterAuditId}
-            onChange={(e) => setFilterAuditId(e.target.value)}
-            className="w-full sm:w-32 border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          />
-          <input
-            type="text"
-            placeholder="Report ID (IQR)"
-            value={filterReportId}
-            onChange={(e) => setFilterReportId(e.target.value)}
-            className="w-full sm:w-36 border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          />
-          {!isManager && (
-            <select
-              value={filterPrakalpa}
-              onChange={(e) => setFilterPrakalpa(e.target.value)}
-              className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-            >
-              <option value="All">All Prakalpas</option>
-              {PRAKALPAS.map((d) => (
-                <option key={d}>{d}</option>
-              ))}
-            </select>
-          )}
-          <select
-            value={filterClassification}
-            onChange={(e) => setFilterClassification(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Types</option>
-            <option value="NC">NC</option>
-            <option value="OFI">OFI</option>
-          </select>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Status</option>
-            <option value="open">Open</option>
-            <option value="closed">Closed</option>
-          </select>
-          <select
-            value={filterCoordinator}
-            onChange={(e) => setFilterCoordinator(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Coordinators</option>
-            {AUDIT_COORDINATORS.map((c) => (
-              <option key={c}>{c}</option>
-            ))}
-          </select>
-          {(search ||
-            filterAuditId ||
-            filterReportId ||
-            filterPrakalpa !== "All" ||
-            filterClassification !== "All" ||
-            filterCoordinator !== "All" ||
-            filterStatus !== "All") && (
-            <button
-              onClick={clearFilters}
-              className="font-label-md text-on-surface-variant/60 hover:text-primary"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search reports..." }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : []),
+            ...(filterAuditId !== "" ? [{ key: "filterAuditId", label: "Audit ID", value: filterAuditId, onRemove: () => setFilterAuditId("") }] : []),
+            ...(filterReportId !== "" ? [{ key: "filterReportId", label: "IQR ID", value: filterReportId, onRemove: () => setFilterReportId("") }] : []),
+            ...(!isManager && filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : []),
+            ...(filterClassification !== "All" ? [{ key: "filterClassification", label: "Classification", value: filterClassification, onRemove: () => setFilterClassification("All") }] : []),
+            ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : []),
+            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : [])
+          ]}
+          onClearAll={clearFilters} resultCount={filtered.length} resultLabel="reports shown">
+          <FilterText label="Audit ID" value={filterAuditId} onChange={setFilterAuditId} placeholder="Partial Audit ID" />
+          <FilterText label="IQR ID" value={filterReportId} onChange={setFilterReportId} placeholder="Partial IQR ID" />
+          {!isManager && <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={filterPrakalpaOptions.map(value => ({ value, label: value }))} searchable allLabel="All Prakalpas" />}
+          <FilterSelect label="Classification" value={filterClassification} onChange={setFilterClassification} options={[{ value: "NC", label: "NC" }, { value: "OFI", label: "OFI" }]} allLabel="All Types" />
+          <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus} options={[{ value: "open", label: "Open" }, { value: "closed", label: "Closed" }]} allLabel="All Statuses" />
+          <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={filterCoordinatorOptions.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
+        </FilterToolbar>
 
       {filtered.length === 0 ? (
         <div className="bg-white rounded-xl border border-outline-variant/10 shadow-soft p-16 flex flex-col items-center justify-center gap-4 text-center">
@@ -655,9 +616,7 @@ export default function AllReportsPage() {
                       ? new Date(report.reportClosedOn || report.closedAt!)
                       : new Date();
 
-                  const daysOpen = Math.floor(
-                    (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
-                  );
+                  const daysOpen = reportDaysOpen(Number.isFinite(startDate.getTime()) ? startDate.toISOString() : null, Number.isFinite(endDate.getTime()) ? endDate.toISOString() : null) ?? 0;
 
                   const isRedFlagged = (report.status ?? "open") === "open" && daysOpen > 30;
                   const ncObs = report.severity === "non_conformance" ? 1 : 0;
@@ -786,8 +745,8 @@ export default function AllReportsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          {/* Edit */}
-                          <button
+                          {/* Coordinator-only editing */}
+                          {isCoordinator && report.workflowStatus !== "verified_closed" && <button
                             onClick={(e) => {
                               e.stopPropagation();
                               handleEditReport(report);
@@ -798,7 +757,7 @@ export default function AllReportsPage() {
                             <span className="material-symbols-outlined text-[18px]">
                               edit
                             </span>
-                          </button>
+                          </button>}
 
                           {/* View */}
                           <button
@@ -875,9 +834,7 @@ export default function AllReportsPage() {
             ? new Date(detailTarget.reportClosedOn || detailTarget.closedAt!)
             : new Date();
 
-        const modalDaysOpen = Math.floor(
-          (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
-        );
+        const modalDaysOpen = reportDaysOpen(Number.isFinite(startDate.getTime()) ? startDate.toISOString() : null, Number.isFinite(endDate.getTime()) ? endDate.toISOString() : null) ?? 0;
 
         return (
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
@@ -1090,6 +1047,8 @@ export default function AllReportsPage() {
                   </div>
                 </div>
 
+                {!!detailTarget.actionProofFiles?.length && <div className="space-y-2"><p className="font-semibold text-on-surface">Prakalpa Corrective-Action Proof</p>{detailTarget.actionProofFiles.map((token, index) => <button key={token} type="button" className="block text-sm text-primary underline" onClick={() => void downloadReportActionProof(detailTarget._id, token)}>View action proof {index + 1}</button>)}</div>}
+
                 {/* Completion Remarks Section */}
                 <div>
                   <p className="font-semibold text-on-surface mb-2">Completion Remarks</p>
@@ -1140,6 +1099,12 @@ export default function AllReportsPage() {
                       </div>
                     )}
 
+                  {isCoordinator && ["sent_to_prakalpa", "returned_to_prakalpa"].includes(detailTarget.workflowStatus || "") && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800" title="Awaiting Actions Taken from Prakalpa Manager">
+                      <span className="material-symbols-outlined align-middle mr-2">pending_actions</span>
+                      Verify & Close unavailable — awaiting Actions Taken from Prakalpa Manager for this IQR.
+                    </div>
+                  )}
                   {/* Coordinator Corrective-Action Verification */}
                 {isCoordinator &&
                   detailTarget.workflowStatus === "action_submitted" && (
@@ -1244,7 +1209,7 @@ export default function AllReportsPage() {
       })()}
 
       {/* Edit Report Modal */}
-      {editTarget && (
+      {editTarget && isCoordinator && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/40"

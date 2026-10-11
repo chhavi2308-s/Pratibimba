@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from "node:fs";
 import mongoose from 'mongoose';
 import path from 'path';
 import dotenv from 'dotenv';
@@ -14,7 +15,7 @@ const roleMapping = {
   'Admin': 'admin',
   'Super Admin': 'admin',
   'Coordinator': 'audit_coordinator',
-  'Lead Auditor': 'lead_auditor',
+  'Lead Auditor': 'auditor',
   'Auditor': 'auditor'
 };
 
@@ -24,13 +25,33 @@ const connectDB = async () => {
     await mongoose.connect(mongoURI);
     console.log('✅ Connected to MongoDB Atlas');
   } catch (err) {
-    console.error('❌ Connection error:', err.message);
+    console.error('❌ Database connection failed.');
     process.exit(1);
   }
 };
 
+// Supply a private JSON object mapping each account email to its initial password.
+// Only the file path is configured; password values never appear in CLI arguments.
+function readInitialPasswords(emails) {
+  const file = process.env.PRATIBIMBA_INITIAL_PASSWORDS_FILE;
+  if (!file) throw new Error("Private initial-password configuration is required.");
+  const info = statSync(file);
+  if (!info.isFile() || (info.mode & 0o077) || info.uid !== process.getuid()) {
+    throw new Error("Initial-password file must be owner-only (0600 or stricter).");
+  }
+  const values = JSON.parse(readFileSync(file, "utf8"));
+  if (!values || typeof values !== "object" || Array.isArray(values)) {
+    throw new Error("Invalid initial-password configuration.");
+  }
+  for (const email of emails) {
+    if (!Object.hasOwn(values, email) || typeof values[email] !== "string" || values[email].length < 12) {
+      throw new Error("Every initial account requires an explicitly supplied strong password.");
+    }
+  }
+  return values;
+}
+
 const runMigration = async () => {
-  await connectDB();
 
   console.log('--- Merging Users into Database ---');
   const excelUsers = [
@@ -47,6 +68,9 @@ const runMigration = async () => {
     { name: 'Super Admin', email: 'admin@pratibimba.com', phone: '0000000000', role: 'Super Admin' }
   ];
 
+  const initialPasswords = readInitialPasswords(excelUsers.map(user => user.email.toLowerCase()));
+  await connectDB();
+
   for (const u of excelUsers) {
     const emailLower = u.email.toLowerCase();
     const existing = await User.findOne({ email: emailLower });
@@ -57,7 +81,7 @@ const runMigration = async () => {
         email: emailLower,
         phone: u.phone,
         role: roleMapping[u.role] || 'auditor',
-        password: 'testpassword123'
+        password: initialPasswords[emailLower]
       });
       console.log(` + Successfully added missing user: ${emailLower} (${roleMapping[u.role]})`);
     } else {
@@ -69,4 +93,8 @@ const runMigration = async () => {
   process.exit(0);
 };
 
-runMigration();
+runMigration().catch(async () => {
+  console.error("Population failed; no credential details are logged.");
+  await mongoose.disconnect().catch(() => {});
+  process.exitCode = 1;
+});

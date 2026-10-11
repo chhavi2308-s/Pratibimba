@@ -1,4 +1,5 @@
 import AuditPlan from "../models/AuditPlan.js";
+import User from "../models/User.js";
 import ScheduledAudit from "../models/ScheduledAudit.js";
 import Report from "../models/Report.js";
 import Prakalpa from "../models/Prakalpa.js";
@@ -678,6 +679,21 @@ export const scheduleAuditPlan = async (
     );
   }
 
+  const leadAuditorUser = await User.findOne({
+    name: requestedLeadAuditor,
+    role: "auditor",
+    active: true,
+  }).select("_id name role active");
+
+  if (!leadAuditorUser) {
+    throw new AppError(
+      "Selected Lead Auditor must be an active Auditor account.",
+      400
+    );
+  }
+
+
+
   /*
    * The scheduled start date becomes the current
    * operational audit date on the master AuditPlan.
@@ -740,6 +756,7 @@ export const scheduleAuditPlan = async (
     purpose: plan.purpose || "",
     auditors: plan.auditors,
     leadAuditor: requestedLeadAuditor,
+    workflowMode: "legacy",
     startDate,
     endDate,
     status: "upcoming",
@@ -747,6 +764,7 @@ export const scheduleAuditPlan = async (
   };
 
   if (scheduledAudit) {
+    delete scheduledAuditData.workflowMode;
     Object.assign(
       scheduledAudit,
       scheduledAuditData

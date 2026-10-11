@@ -1,3 +1,5 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
 import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 
@@ -16,20 +18,40 @@ import {
 
 import {
   updateAuditPlan,
+  unscheduleAuditPlan,
 } from "../services/auditPlanService";
 
+import {
+  getScheduledAuditFindings,
+  getCoordinatorFindingSummaries,
+  type CoordinatorFindingSummary,
+  createAuditFindingDraft,
+  updateAuditFindingDraft,
+  getAuditorBatchStatus,
+  submitAllAuditorFindings,
+  type AuditFinding,
+} from "../services/auditFindingService";
+
+import FindingEvidence from "../components/finding-evidence";
 import SendScheduledAuditEmailModal from "../components/send-scheduled-audit-email-modal";
 
 export default function ScheduledAuditsPage() {
-  const { currentUser, auditors } = useApp();
+
+const { currentUser, auditors, auditorDirectoryError } = useApp();
 
   const [, navigate] = useLocation();
 
   const [scheduledAudits, setScheduledAudits] =
     useState<ScheduledAudit[]>([]);
+  const [receivedFindings, setReceivedFindings] = useState<Record<string, CoordinatorFindingSummary>>({});
 
   const [editTarget, setEditTarget] =
     useState<ScheduledAudit | null>(null);
+
+  const [unscheduleTarget, setUnscheduleTarget] =
+    useState<ScheduledAudit | null>(null);
+  const [isUnscheduling, setIsUnscheduling] = useState(false);
+  const [unscheduleError, setUnscheduleError] = useState("");
 
   const [mailTarget, setMailTarget] =
     useState<ScheduledAudit | null>(null);
@@ -43,8 +65,12 @@ export default function ScheduledAuditsPage() {
   const [editCoordinator, setEditCoordinator] =
     useState("");
 
-  const [editAuditors, setEditAuditors] =
+
+const [editAuditors, setEditAuditors] =
     useState<string[]>([]);
+
+  const [editLeadAuditor, setEditLeadAuditor] =
+    useState("");
 
   const [saving, setSaving] =
     useState(false);
@@ -88,6 +114,31 @@ export default function ScheduledAuditsPage() {
   const [filterCoordinator, setFilterCoordinator] =
     useState("All");
 
+  const [findingDialogTarget, setFindingDialogTarget] =
+    useState<ScheduledAudit | null>(null);
+  const [findingDrafts, setFindingDrafts] =
+    useState<AuditFinding[]>([]);
+  const [selectedFindingId, setSelectedFindingId] =
+    useState<string | null>(null);
+  const [findingDescription, setFindingDescription] =
+    useState("");
+  const [findingClassification, setFindingClassification] =
+    useState<"NC" | "OFI" | "">("");
+  const [findingLoading, setFindingLoading] =
+    useState(false);
+  const [findingSaving, setFindingSaving] =
+    useState(false);
+  const [findingSubmitting, setFindingSubmitting] = useState(false);
+  const [auditorBatchSubmitted, setAuditorBatchSubmitted] = useState(false);
+  const [auditorSubmissionByAudit, setAuditorSubmissionByAudit] =
+    useState<Record<string, boolean>>({});
+  const [showBatchConfirm, setShowBatchConfirm] = useState(false);
+  const [batchAcknowledged, setBatchAcknowledged] = useState(false);
+  const [findingMessage, setFindingMessage] =
+    useState("");
+  const [findingError, setFindingError] =
+    useState("");
+
   useEffect(() => {
     loadScheduledAudits();
   }, []);
@@ -99,6 +150,36 @@ export default function ScheduledAuditsPage() {
       setScheduledAudits(
         Array.isArray(data) ? data : []
       );
+      if (currentUser.role === "auditor") {
+        const assigned = (Array.isArray(data) ? data : []).filter(
+          (audit) => (audit.auditors || []).includes(currentUser.name || "")
+        );
+        const statuses = await Promise.all(
+          assigned.map(async (audit) => {
+            const id = audit.id || audit._id;
+            if (!id) return null;
+            try {
+              const status = await getAuditorBatchStatus(id);
+              return [id, Boolean(status)] as const;
+            } catch (error) {
+              console.error("Unable to load Auditor submission status", id, error);
+              return [id, true] as const;
+            }
+          })
+        );
+        setAuditorSubmissionByAudit(
+          Object.fromEntries(statuses.filter((entry) => entry !== null) as Array<readonly [string, boolean]>)
+        );
+      }
+      if (currentUser.role === "audit_coordinator") {
+        try {
+          const summaries = await getCoordinatorFindingSummaries();
+          setReceivedFindings(Object.fromEntries(summaries.map(s => [s.scheduledAuditId, s])));
+        } catch (summaryError) {
+          console.error("Unable to load Coordinator finding counts", summaryError);
+          setReceivedFindings({});
+        }
+      }
     } catch (err) {
       console.error(
         "Scheduled audits error:",
@@ -121,10 +202,16 @@ export default function ScheduledAuditsPage() {
 
   const canManage =
     currentUser.role === "audit_coordinator" ||
-    currentUser.role === "admin";
+    currentUser.role === "admin" ||
+    currentUser.role === "super_admin";
 
   const isAuditor =
     currentUser.role === "auditor";
+
+  const showActionsColumn =
+    canManage || isAuditor;
+
+  const showMailColumn = currentUser.role !== "auditor";
 
   const getStatus = (
     s: ScheduledAudit
@@ -133,20 +220,17 @@ export default function ScheduledAuditsPage() {
       return "completed";
     }
 
-    const now = new Date();
     const startDate = new Date(s.startDate);
-    const endDate = new Date(s.endDate);
 
-    if (
-      !Number.isNaN(startDate.getTime()) &&
-      !Number.isNaN(endDate.getTime()) &&
-      now >= startDate &&
-      now <= endDate
-    ) {
-      return "ongoing";
+    if (Number.isNaN(startDate.getTime())) {
+      return "upcoming";
     }
 
-    return "upcoming";
+    const today = new Date();
+
+    // Once an audit starts, it remains In Progress
+    // until explicitly marked Completed.
+    return today >= startDate ? "ongoing" : "upcoming";
   };
 
   const canMarkCompleted = (
@@ -170,6 +254,263 @@ export default function ScheduledAuditsPage() {
     }
 
     return new Date() >= endDate;
+  };
+
+  const canAddFindingsForAudit = (
+    audit: ScheduledAudit
+  ) => {
+    if (
+      currentUser.role !== "auditor"
+    ) {
+      return false;
+    }
+
+    if (
+      (audit.auditors || []).includes(
+        currentUser.name || ""
+      ) === false
+    ) {
+      return false;
+    }
+
+    if (audit.status === "completed") {
+      return false;
+    }
+
+    const auditId = audit.id || audit._id;
+    if (!auditId || auditorSubmissionByAudit[auditId] !== false) {
+      return false;
+    }
+
+    const startDate =
+      new Date(audit.startDate);
+
+    if (
+      Number.isNaN(
+        startDate.getTime()
+      )
+    ) {
+      return false;
+    }
+
+    return new Date() >= startDate;
+  };
+
+  const loadFindingDialogData = async (
+    audit: ScheduledAudit
+  ) => {
+    const id =
+      audit.id || audit._id;
+
+    if (!id) {
+      setFindingError(
+        "Scheduled Audit ID is missing."
+      );
+      return;
+    }
+
+    setFindingLoading(true);
+    setFindingError("");
+    setFindingMessage("");
+
+    try {
+      const [findings, batchStatus] = await Promise.all([
+        getScheduledAuditFindings(id), getAuditorBatchStatus(id),
+      ]);
+      setAuditorBatchSubmitted(Boolean(batchStatus));
+      setAuditorSubmissionByAudit((previous) => ({
+        ...previous,
+        [id]: Boolean(batchStatus),
+      }));
+
+      setFindingDrafts(
+        Array.isArray(findings)
+          ? findings
+          : []
+      );
+
+      const firstDraft =
+        (Array.isArray(findings)
+          ? findings
+          : []
+        ).find(
+          (item) =>
+            String(item.status).toUpperCase() === "DRAFT" ||
+            item.workflowStatus === "auditor_draft"
+        );
+
+      if (firstDraft) {
+        setSelectedFindingId(
+          firstDraft._id || firstDraft.id || ""
+        );
+        setFindingDescription(
+          firstDraft.description ||
+            firstDraft.findings ||
+            ""
+        );
+        setFindingClassification(
+          firstDraft.classification === "NC" ||
+            firstDraft.classification === "OFI"
+            ? firstDraft.classification
+            : ""
+        );
+      } else {
+        setSelectedFindingId(null);
+        setFindingDescription("");
+        setFindingClassification("");
+      }
+    } catch (err: any) {
+      setAuditorBatchSubmitted(true);
+      setFindingError(
+        err?.response?.data?.message ||
+          err?.message ||
+          "Unable to load findings for this audit."
+      );
+    } finally {
+      setFindingLoading(false);
+    }
+  };
+
+  const openFindingDialog = async (
+    audit: ScheduledAudit
+  ) => {
+    setFindingLoading(true);
+    setAuditorBatchSubmitted(true);
+    setFindingDialogTarget(audit);
+    setFindingError("");
+    setFindingMessage("");
+    setSelectedFindingId(null);
+    setFindingDescription("");
+    setFindingClassification("");
+    await loadFindingDialogData(audit);
+  };
+
+  const closeFindingDialog = () => {
+    setShowBatchConfirm(false);
+    setBatchAcknowledged(false);
+    setFindingDialogTarget(null);
+    setFindingDrafts([]);
+    setSelectedFindingId(null);
+    setFindingDescription("");
+    setFindingClassification("");
+    setFindingError("");
+    setFindingMessage("");
+  };
+
+  const fillFindingForm = (
+    finding: AuditFinding
+  ) => {
+    setSelectedFindingId(
+      finding._id || finding.id || null
+    );
+    setFindingDescription(
+      finding.description ||
+        finding.findings ||
+        ""
+    );
+    setFindingClassification(
+      finding.classification === "NC" ||
+        finding.classification === "OFI"
+        ? finding.classification
+        : ""
+    );
+    setFindingError("");
+    setFindingMessage("");
+  };
+
+  const handleSaveFindingDraft = async () => {
+    if (!findingDialogTarget) {
+      return;
+    }
+
+    if (!findingDescription.trim()) {
+      setFindingError(
+        "Finding description is required."
+      );
+      return;
+    }
+
+    const id =
+      findingDialogTarget.id ||
+      findingDialogTarget._id;
+
+    if (!id) {
+      setFindingError(
+        "Scheduled Audit ID is missing."
+      );
+      return;
+    }
+
+    try {
+      setFindingSaving(true);
+      setFindingError("");
+      setFindingMessage("");
+
+      if (selectedFindingId) {
+        await updateAuditFindingDraft(
+          id,
+          selectedFindingId,
+          {
+            description: findingDescription.trim(),
+            classification:
+              findingClassification || undefined,
+          }
+        );
+
+        setFindingMessage(
+          "Draft saved successfully."
+        );
+      } else {
+        const created =
+          await createAuditFindingDraft(id, {
+            description:
+              findingDescription.trim(),
+            classification:
+              findingClassification || undefined,
+          });
+
+        setSelectedFindingId(
+          created._id || created.id || null
+        );
+        setFindingMessage(
+          "Draft created. Add your proof below, then submit to the Lead Auditor."
+        );
+      }
+
+      await loadFindingDialogData(
+        findingDialogTarget
+      );
+    } catch (err: any) {
+      setFindingError(
+        err?.response?.data?.message ||
+          err?.message ||
+          "Failed to save the draft."
+      );
+    } finally {
+      setFindingSaving(false);
+    }
+  };
+
+  const handleSubmitFindingBatch = async () => {
+    const id = findingDialogTarget?.id || findingDialogTarget?._id;
+    if (!id || !batchAcknowledged) return;
+    try {
+      setFindingSubmitting(true);
+      setFindingError("");
+      const result = await submitAllAuditorFindings(id);
+      setAuditorBatchSubmitted(true);
+      setAuditorSubmissionByAudit((previous) => ({
+        ...previous,
+        [id]: true,
+      }));
+      setShowBatchConfirm(false);
+      setBatchAcknowledged(false);
+      await loadFindingDialogData(findingDialogTarget!);
+      setFindingMessage(`Final batch sent to Lead Auditor (${result.findingCount} findings). No further edits or submissions are allowed.`);
+    } catch (err: any) {
+      setFindingError(err?.response?.data?.message || err?.message || "Unable to send the complete batch.");
+      setShowBatchConfirm(false);
+    } finally { setFindingSubmitting(false); }
   };
 
   const openCompletionReview = (
@@ -242,6 +583,13 @@ export default function ScheduledAuditsPage() {
     [scheduledAudits]
   );
 
+  const filterAudits = useMemo(() => scheduledAudits.filter(s =>
+    (currentUser.role !== "audit_coordinator" || s.auditCoordinator === currentUser.name) &&
+    (!isAuditor || (s.auditors || []).includes(currentUser.name || ""))
+  ), [scheduledAudits, currentUser, isAuditor]);
+  const filterPrakalpaOptions = useMemo(() => [...new Set(filterAudits.map(s => s.prakalpa).filter(Boolean))], [filterAudits]);
+  const filterCoordinatorOptions = useMemo(() => [...new Set(filterAudits.map(s => s.auditCoordinator).filter(Boolean))], [filterAudits]);
+
   const filtered = useMemo(
     () =>
       scheduledAudits.filter((s) => {
@@ -275,10 +623,12 @@ export default function ScheduledAuditsPage() {
             .includes(q);
 
         const matchUser =
-          !isAuditor ||
-          (s.auditors || []).includes(
-            currentUser.name || ""
-          );
+          (currentUser.role !== "audit_coordinator" ||
+            s.auditCoordinator === currentUser.name) &&
+          (!isAuditor ||
+            (s.auditors || []).includes(
+              currentUser.name || ""
+            ));
 
         return (
           matchSearch &&
@@ -340,6 +690,39 @@ export default function ScheduledAuditsPage() {
     };
   };
 
+  const handleUnschedule = async () => {
+    if (!unscheduleTarget || isUnscheduling) return;
+
+    const planId = unscheduleTarget.auditPlan;
+    if (!planId) {
+      setUnscheduleError("Linked Audit Plan ID is missing.");
+      return;
+    }
+
+    const allowed =
+      currentUser.role === "admin" ||
+      currentUser.role === "super_admin" ||
+      (currentUser.role === "audit_coordinator" &&
+        unscheduleTarget.auditCoordinator === currentUser.name);
+
+    if (!allowed || unscheduleTarget.status === "completed") {
+      setUnscheduleError("You cannot unschedule this audit.");
+      return;
+    }
+
+    try {
+      setIsUnscheduling(true);
+      setUnscheduleError("");
+      await unscheduleAuditPlan(planId);
+      await loadScheduledAudits();
+      setUnscheduleTarget(null);
+    } catch (err: any) {
+      setUnscheduleError(err?.message || "Failed to unschedule audit.");
+    } finally {
+      setIsUnscheduling(false);
+    }
+  };
+
   const openEdit = (
     audit: ScheduledAudit
   ) => {
@@ -367,8 +750,13 @@ export default function ScheduledAuditsPage() {
       audit.auditCoordinator || ""
     );
 
-    setEditAuditors(
+
+setEditAuditors(
       audit.auditors || []
+    );
+
+    setEditLeadAuditor(
+      audit.leadAuditor || ""
     );
   };
 
@@ -379,7 +767,9 @@ export default function ScheduledAuditsPage() {
     setEditStartDate("");
     setEditEndDate("");
     setEditCoordinator("");
-    setEditAuditors([]);
+
+setEditAuditors([]);
+    setEditLeadAuditor("");
     setEditError("");
   };
 
@@ -415,6 +805,14 @@ export default function ScheduledAuditsPage() {
     ) {
       setEditError(
         "Audit Coordinator is required."
+      );
+      return;
+    }
+
+
+    if (!editLeadAuditor.trim()) {
+      setEditError(
+        "Lead Auditor is required."
       );
       return;
     }
@@ -461,8 +859,12 @@ export default function ScheduledAuditsPage() {
           auditCoordinator:
             editCoordinator,
 
+
           auditors:
             editAuditors,
+
+          leadAuditor:
+            editLeadAuditor,
         }
       );
 
@@ -504,185 +906,22 @@ export default function ScheduledAuditsPage() {
 
       {/* Filters */}
 
-      <div className="bg-white p-4 rounded-xl border border-outline-variant/20 shadow-soft flex flex-wrap gap-3 items-center">
-
-        <div className="relative w-full sm:flex-1 sm:min-w-[180px]">
-
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">
-            search
-          </span>
-
-          <input
-            type="text"
-            placeholder="Search Audit ID, Prakalpa, Location..."
-            value={search}
-            onChange={(e) =>
-              setSearch(
-                e.target.value
-              )
-            }
-            className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest"
-          />
-
-        </div>
-
-        <select
-          value={filterPrakalpa}
-          onChange={(e) =>
-            setFilterPrakalpa(
-              e.target.value
-            )
-          }
-          className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-        >
-
-          <option value="All">
-            All Prakalpas
-          </option>
-
-          {PRAKALPAS.map((d) => (
-            <option
-              key={d}
-              value={d}
-            >
-              {d}
-            </option>
-          ))}
-
-        </select>
-
-        <select
-          value={filterLocation}
-          onChange={(e) =>
-            setFilterLocation(
-              e.target.value
-            )
-          }
-          className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-        >
-
-          <option value="All">
-            All Locations
-          </option>
-
-          {allLocations.map((l) => (
-            <option
-              key={l}
-              value={l}
-            >
-              {l}
-            </option>
-          ))}
-
-        </select>
-
-        {!isAuditor && (
-          <select
-            value={filterAuditor}
-            onChange={(e) =>
-              setFilterAuditor(
-                e.target.value
-              )
-            }
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-
-            <option value="All">
-              All Auditors
-            </option>
-
-            {auditors.map((a) => (
-              <option
-                key={a}
-                value={a}
-              >
-                {a}
-              </option>
-            ))}
-
-          </select>
-        )}
-
-        <select
-          value={filterStatus}
-          onChange={(e) =>
-            setFilterStatus(
-              e.target.value
-            )
-          }
-          className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-        >
-
-          <option value="All">
-            All Status
-          </option>
-
-          <option value="Upcoming">
-            Upcoming
-          </option>
-
-          <option value="Ongoing">
-            Ongoing
-          </option>
-
-          <option value="Completed">
-            Completed
-          </option>
-
-        </select>
-
-        <select
-          value={filterCoordinator}
-          onChange={(e) =>
-            setFilterCoordinator(
-              e.target.value
-            )
-          }
-          className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-        >
-
-          <option value="All">
-            All Coordinators
-          </option>
-
-          {AUDIT_COORDINATORS.map(
-            (c) => (
-              <option
-                key={c}
-                value={c}
-              >
-                {c}
-              </option>
-            )
-          )}
-
-        </select>
-
-        {(search ||
-          filterPrakalpa !== "All" ||
-          filterLocation !== "All" ||
-          filterAuditor !== "All" ||
-          filterStatus !== "All" ||
-          filterCoordinator !==
-            "All") && (
-          <button
-            onClick={() => {
-              setSearch("");
-              setFilterPrakalpa("All");
-              setFilterLocation("All");
-              setFilterAuditor("All");
-              setFilterStatus("All");
-              setFilterCoordinator(
-                "All"
-              );
-            }}
-            className="font-label-md text-on-surface-variant/60 hover:text-primary"
-          >
-            Clear
-          </button>
-        )}
-
-      </div>
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search Audit ID, Prakalpa, Location..." }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : []),
+            ...(filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : []),
+            ...(filterLocation !== "All" ? [{ key: "filterLocation", label: "Location", value: filterLocation, onRemove: () => setFilterLocation("All") }] : []),
+            ...(!isAuditor && filterAuditor !== "All" ? [{ key: "filterAuditor", label: "Auditor", value: filterAuditor, onRemove: () => setFilterAuditor("All") }] : []),
+            ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : []),
+            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : [])
+          ]}
+          onClearAll={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterAuditor("All"); setFilterStatus("All"); setFilterCoordinator("All"); }} resultCount={filtered.length} resultLabel="audits shown">
+          <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={filterPrakalpaOptions.map(value => ({ value, label: value }))} searchable allLabel="All Prakalpas" />
+          <FilterSelect label="Location" value={filterLocation} onChange={setFilterLocation} options={[...new Set(filterAudits.map(s => s.location).filter(Boolean))].map(value => ({ value, label: value }))} searchable allLabel="All Locations" />
+          {!isAuditor && <FilterSelect label="Auditor" value={filterAuditor} onChange={setFilterAuditor} options={auditors.map(value => ({ value, label: value }))} searchable allLabel="All Auditors" />}
+          <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus} options={[{ value: "Upcoming", label: "Upcoming" }, { value: "Ongoing", label: "Ongoing" }, { value: "Completed", label: "Completed" }]} allLabel="All Statuses" />
+          <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={filterCoordinatorOptions.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
+        </FilterToolbar>
 
       {/* Table */}
 
@@ -719,9 +958,9 @@ export default function ScheduledAuditsPage() {
                     "Dates",
                     "Coordinator",
                     "Pramukh",
-                    "Mail",
+                    ...(showMailColumn ? ["Mail"] : []),
                     "Status",
-                    ...(canManage
+                    ...(showActionsColumn
                       ? ["Actions"]
                       : []),
                   ].map((heading) => (
@@ -779,6 +1018,15 @@ export default function ScheduledAuditsPage() {
                             )
                           );
 
+                    const isMyLeadAssignment =
+                      currentUser.role === "auditor" &&
+                      audit.leadAuditor === currentUser.name;
+
+                    const isMyTeamAssignment =
+                      currentUser.role === "auditor" &&
+                      !isMyLeadAssignment &&
+                      (audit.auditors || []).includes(currentUser.name);
+
                     return (
                       <tr
                         key={
@@ -800,6 +1048,16 @@ export default function ScheduledAuditsPage() {
                           <p className="font-data-mono text-[12px] text-primary font-bold whitespace-nowrap">
                             {audit.iqaNumber}
                           </p>
+                          {isMyLeadAssignment && (
+                            <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-bold whitespace-nowrap">
+                              Lead Auditor
+                            </span>
+                          )}
+                          {isMyTeamAssignment && (
+                            <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-secondary/10 text-secondary text-[10px] font-bold whitespace-nowrap">
+                              Team Auditor
+                            </span>
+                          )}
 
                           <div className="h-1 bg-surface-container-high rounded-full mt-1.5 w-20">
 
@@ -958,6 +1216,7 @@ export default function ScheduledAuditsPage() {
 
                         {/* Mail */}
 
+                        {showMailColumn && (
                         <td className="px-3 py-3">
 
                           {audit.mailSent ? (
@@ -970,8 +1229,9 @@ export default function ScheduledAuditsPage() {
                               Sent
 
                             </span>
-                          ) : (
+                          ) : canManage ? (
                             <button
+                              title="Notify about audit being scheduled"
                               onClick={() =>
                                 setMailTarget(
                                   audit
@@ -987,92 +1247,164 @@ export default function ScheduledAuditsPage() {
                               Send Mail
 
                             </button>
-                          )}
+                          ) : null}
 
                         </td>
+                        )}
 
                         {/* Status */}
-
                         <td className="px-3 py-3 text-center">
-
-                          <div className="flex items-center justify-center">
-
-                            {audit.status === "completed" ? (
-                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase whitespace-nowrap bg-green-100 text-green-700">
-                                Completed
-                              </span>
-                            ) : canMarkCompleted(
-                                audit
-                              ) ? (
-                              <div className="relative group inline-flex items-center justify-center">
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    openCompletionReview(
-                                      audit
-                                    )
-                                  }
-                                  aria-label="Mark as Completed"
-                                  className="w-8 h-8 rounded-full flex items-center justify-center bg-amber-100 text-amber-700 hover:bg-amber-600 hover:text-white transition-colors"
-                                >
-                                  <span className="material-symbols-outlined text-[18px]">
-                                    task_alt
-                                  </span>
-                                </button>
-
-                                <div className="pointer-events-none absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-gray-900 text-white text-[10px] font-medium px-2 py-1 rounded shadow-lg">
-                                  Mark as Completed
+                          {canManage ? (
+                            <div className="flex items-center justify-center">
+                              {audit.status === "completed" ? (
+                                <span className="rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold uppercase text-green-700">
+                                  Completed
+                                </span>
+                              ) : canMarkCompleted(audit) ? (
+                                <div className="relative group">
+                                  <button
+                                    type="button"
+                                    onClick={() => openCompletionReview(audit)}
+                                    title="Mark as Completed"
+                                    aria-label="Mark as Completed"
+                                    className="rounded-lg p-1.5 text-amber-700 hover:bg-amber-50"
+                                  >
+                                    <span className="material-symbols-outlined text-[20px]">
+                                      task_alt
+                                    </span>
+                                  </button>
+                                  <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-[10px] whitespace-nowrap text-white opacity-0 transition-opacity group-hover:opacity-100">
+                                    Mark as Completed
+                                  </div>
                                 </div>
-
-                              </div>
-                            ) : (
-                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase whitespace-nowrap bg-secondary/10 text-secondary">
-                                Upcoming
-                              </span>
-                            )}
-
-                          </div>
-
+                              ) : (
+                                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase text-amber-800">
+                                  Upcoming
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center">
+                              {(() => {
+                                const stage = getStatus(audit);
+                                return (
+                                  <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase whitespace-nowrap ${
+                                    stage === "completed"
+                                      ? "bg-green-100 text-green-700"
+                                      : stage === "ongoing"
+                                        ? "bg-blue-100 text-blue-800"
+                                        : "bg-amber-100 text-amber-800"
+                                  }`}>
+                                    {stage === "completed"
+                                      ? "Completed"
+                                      : stage === "ongoing"
+                                        ? "In Progress"
+                                        : "Upcoming"}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          )}
                         </td>
 
                         {/* Actions */}
 
-                        {canManage && (
+                        {showActionsColumn && (
                           <td className="px-3 py-3">
 
                             <div className="flex gap-2 whitespace-nowrap">
 
-                              {audit.status ===
-                              "completed" ? (
-                                <button
-                                  className="px-2 py-1.5 rounded-lg bg-green-600 text-white text-[11px] font-semibold hover:bg-green-700 whitespace-nowrap"
-                                  onClick={() => {
-                                    setReportTarget(
-                                      audit
-                                    );
+                              {canManage ? (
+                                <>
+                                  {currentUser.role === "audit_coordinator" &&
+                                    audit.auditCoordinator === currentUser.name &&
+                                    audit.workflowMode !== "consolidated" &&
+                                    (receivedFindings[String(audit._id || audit.id || "")]?.received ?? 0) > 0 && (
+                                      <button type="button"
+                                        onClick={() => navigate(`/coordinator-findings?scheduledAuditId=${encodeURIComponent(String(audit._id || audit.id || ""))}`)}
+                                        className="inline-flex items-center gap-1 rounded-lg border border-primary/30 px-3 py-1.5 text-[11px] font-semibold text-primary hover:bg-primary/5">
+                                        Check Findings
+                                        <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px]">
+                                          {receivedFindings[String(audit._id || audit.id || "")]?.awaitingReview ?? 0} awaiting review
+                                        </span>
+                                      </button>
+                                    )}
+                                  {audit.status !== "completed" && (
+                                    <button
+                                      onClick={() => openEdit(audit)}
+                                      className="p-1.5 rounded-lg hover:bg-surface-container"
+                                      title="Edit Scheduled Audit"
+                                    >
+                                      <span className="material-symbols-outlined text-[18px]">
+                                        edit
+                                      </span>
+                                    </button>
+                                  )}
 
-                                    setReportConfirmed(
-                                      false
-                                    );
-                                  }}
-                                >
-                                  Generate Report
-                                </button>
+                                  {audit.status !== "completed" &&
+                                    (currentUser.role === "admin" ||
+                                      currentUser.role === "super_admin" ||
+                                      (currentUser.role === "audit_coordinator" &&
+                                        audit.auditCoordinator === currentUser.name)) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setUnscheduleError("");
+                                          setUnscheduleTarget(audit);
+                                        }}
+                                        className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-700"
+                                        title="Unschedule Audit"
+                                      >
+                                        <span className="material-symbols-outlined text-[18px]">
+                                          event_busy
+                                        </span>
+                                      </button>
+                                    )}
+                                </>
                               ) : (
-                                <button
-                                  onClick={() =>
-                                    openEdit(
-                                      audit
-                                    )
-                                  }
-                                  className="p-1.5 rounded-lg hover:bg-surface-container"
-                                  title="Edit Scheduled Audit"
-                                >
-                                  <span className="material-symbols-outlined text-[18px]">
-                                    edit
-                                  </span>
-                                </button>
+                                <>
+                                  {isMyLeadAssignment && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const params = new URLSearchParams({
+                                          scheduledAuditId:
+                                            audit.id || audit._id || "",
+                                          workflowMode:
+                                            audit.workflowMode ?? "legacy",
+                                          iqaNumber: audit.iqaNumber || "",
+                                          prakalpa: audit.prakalpa || "",
+                                          location: audit.location || "",
+                                          sublocation: audit.sublocation || "",
+                                          startDate: audit.startDate || "",
+                                          endDate: audit.endDate || "",
+                                          auditCoordinator:
+                                            audit.auditCoordinator || "",
+                                        });
+                                        navigate(
+                                          `/lead-findings?${params.toString()}`
+                                        );
+                                      }}
+                                      className="px-2 py-1.5 rounded-lg border border-primary/30 text-primary text-[11px] font-semibold hover:bg-primary/5 whitespace-nowrap"
+                                    >
+                                      Review Findings
+                                    </button>
+                                  )}
+                                  {canAddFindingsForAudit(audit) ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        openFindingDialog(audit)
+                                      }
+                                      className="px-2 py-1.5 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary/90 whitespace-nowrap"
+                                    >
+                                      Add Findings
+                                    </button>
+                                  ) : null}
+                                  {!isMyLeadAssignment && !canAddFindingsForAudit(audit) && (
+                                    <span className="px-2 text-sm text-on-surface-variant">—</span>
+                                  )}
+                                </>
                               )}
 
                             </div>
@@ -1116,6 +1448,378 @@ export default function ScheduledAuditsPage() {
 
           </div>
 
+        </div>
+      )}
+
+      {unscheduleTarget && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="unschedule-heading"
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <h3 id="unschedule-heading" className="text-lg font-bold">
+              Unschedule Audit?
+            </h3>
+            <p className="mt-3 text-sm text-gray-600">
+              {unscheduleTarget.iqaNumber} will return to Pending Audit Plans.
+              The Audit Plan itself will not be deleted.
+            </p>
+            {unscheduleError && (
+              <p role="alert" className="mt-3 text-sm text-red-600">
+                {unscheduleError}
+              </p>
+            )}
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={isUnscheduling}
+                onClick={() => setUnscheduleTarget(null)}
+                className="rounded-lg border px-4 py-2"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isUnscheduling}
+                onClick={handleUnschedule}
+                className="rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
+              >
+                {isUnscheduling ? "Unscheduling..." : "Confirm Unschedule"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {findingDialogTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={closeFindingDialog}
+          />
+
+          <div className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-floating">
+
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-outline-variant/10 p-5">
+
+              <div>
+                <h3 className="font-headline-sm text-on-surface">
+                  Audit Findings
+                </h3>
+
+                <p className="mt-1 font-body-md text-on-surface-variant">
+                  {findingDialogTarget.iqaNumber} · {findingDialogTarget.prakalpa}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeFindingDialog}
+                className="rounded-lg p-1.5 hover:bg-surface-container"
+                aria-label="Close findings dialog"
+              >
+                <span className="material-symbols-outlined text-[20px]">
+                  close
+                </span>
+              </button>
+
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4">
+            <div className="mx-6 mt-5 rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+              <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
+                Audit Information
+              </h4>
+              <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3">
+                {([
+                  ["IQA Number", findingDialogTarget.iqaNumber],
+                  ["Prakalpa", findingDialogTarget.prakalpa],
+                  ["Location", [findingDialogTarget.location, findingDialogTarget.sublocation].filter(Boolean).join(" · ")],
+                  ["Start Date", findingDialogTarget.startDate ? new Date(findingDialogTarget.startDate).toLocaleDateString() : ""],
+                  ["End Date", findingDialogTarget.endDate ? new Date(findingDialogTarget.endDate).toLocaleDateString() : ""],
+                  ["Lead Auditor", findingDialogTarget.leadAuditor],
+                  ["Audit Coordinator", findingDialogTarget.auditCoordinator],
+                  ["Status", findingDialogTarget.status],
+                ] as [string, string | undefined][]).map(([label, value]) => (
+                  <div key={label} className="min-w-0">
+                    <p className="text-xs text-on-surface-variant">{label}</p>
+                    <p className="break-words font-semibold text-on-surface">
+                      {value || "Not specified"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="mx-6 mt-3 rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+              <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
+                Audit Areas
+              </h4>
+              {(findingDialogTarget.auditAreas || []).length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {findingDialogTarget.auditAreas.map((area, index) => (
+                    <span
+                      key={`${area}-${index}`}
+                      className="rounded-lg border border-outline-variant/30 bg-white px-3 py-2 text-sm font-medium text-on-surface"
+                    >
+                      {area}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-on-surface-variant">
+                  No audit areas are recorded for this scheduled audit.
+                </p>
+              )}
+            </div>
+
+            <div className="grid gap-6 p-6 lg:grid-cols-[1.1fr_1.6fr]">
+
+              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider">
+                    My Findings
+                  </h4>
+
+                  <button
+                    type="button"
+                    disabled={auditorBatchSubmitted || findingLoading || Boolean(findingError)}
+                    onClick={() => {
+                      setSelectedFindingId(null);
+                      setFindingDescription("");
+                      setFindingClassification("");
+                      setFindingError("");
+                      setFindingMessage("");
+                    }}
+                    className="rounded-lg border border-outline-variant px-2 py-1 text-[11px] font-semibold text-on-surface hover:bg-surface-container"
+                  >
+                    New Draft
+                  </button>
+                </div>
+
+                {findingLoading ? (
+                  <p className="text-sm text-on-surface-variant">Loading findings…</p>
+                ) : findingDrafts.length === 0 ? (
+                  <p className="text-sm text-on-surface-variant">
+                    {findingError
+                      ? "Unable to verify findings and submission status."
+                      : auditorBatchSubmitted
+                        ? "No findings in this Auditor's submitted batch."
+                        : "No findings created yet. Use New Draft to record an observation."}
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {findingDrafts.map((finding) => {
+                      const isDraft =
+                        String(finding.status).toUpperCase() === "DRAFT" ||
+                        finding.workflowStatus === "auditor_draft";
+
+                      const findingId = finding._id || finding.id || "";
+
+                      return (
+                        <button
+                          key={findingId}
+                          type="button"
+                          onClick={() => fillFindingForm(finding)}
+                          className={`w-full rounded-xl border p-3 text-left transition ${
+                            selectedFindingId === findingId
+                              ? "border-primary bg-primary/5"
+                              : "border-outline-variant/20 bg-white hover:bg-surface-container-low"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-body-md font-medium text-on-surface">
+                                {finding.description || finding.findings || "Untitled finding"}
+                              </p>
+                              <p className="mt-1 text-[11px] text-on-surface-variant">
+                                {finding.classification || "Unclassified"}
+                              </p>
+                            </div>
+
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                isDraft
+                                  ? "bg-secondary/10 text-secondary"
+                                  : "bg-primary/10 text-primary"
+                              }`}
+                            >
+                              {isDraft ? "DRAFT" : "SUBMITTED"}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+              </div>
+
+              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+
+                <h4 className="font-label-md text-on-surface-variant uppercase tracking-wider">
+                  {selectedFindingId ? "Edit Draft" : "New Draft"}
+                </h4>
+
+                {findingError && (
+                  <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {findingError}
+                  </div>
+                )}
+
+                {findingMessage && (
+                  <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+                    {findingMessage}
+                  </div>
+                )}
+
+                <div className="mt-4 space-y-4">
+
+                  <div>
+                    <label className="mb-1 block font-label-md text-on-surface-variant">
+                      Finding Description
+                    </label>
+                    <textarea
+                      value={findingDescription}
+                      onChange={(e) => setFindingDescription(e.target.value)}
+                      disabled={auditorBatchSubmitted || Boolean(
+                        selectedFindingId &&
+                          !findingDrafts.find((item) => (item._id || item.id) === selectedFindingId)?.status?.toUpperCase()?.includes("DRAFT") &&
+                          !findingDrafts.find((item) => (item._id || item.id) === selectedFindingId)?.workflowStatus?.includes("auditor_draft")
+                      )}
+                      rows={6}
+                      className="w-full rounded-xl border border-outline-variant bg-white p-3 font-body-md text-on-surface outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-gray-100"
+                      placeholder="Describe the issue noted during the audit."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block font-label-md text-on-surface-variant">
+                      Classification
+                    </label>
+                    <select
+                      value={findingClassification}
+                      onChange={(e) => setFindingClassification(e.target.value as "NC" | "OFI" | "")}
+                      disabled={auditorBatchSubmitted || findingLoading || Boolean(findingError)}
+                      className="w-full rounded-xl border border-outline-variant bg-white p-3 font-body-md text-on-surface outline-none focus:ring-2 focus:ring-primary/20"
+                    >
+                      <option value="">Select classification</option>
+                      <option value="NC">NC</option>
+                      <option value="OFI">OFI</option>
+                    </select>
+                  </div>
+
+                  {!selectedFindingId && (
+                    <div className="rounded-xl border border-dashed border-blue-300 bg-blue-50 p-4 text-sm text-blue-900">
+                      <p className="font-semibold">Add Proof / Evidence</p>
+                      <p className="mt-1">
+                        Enter your finding and click Create Draft below.
+                        The photo/PDF upload option will appear here immediately,
+                        before you submit the finding to the Lead Auditor.
+                      </p>
+                    </div>
+                  )}
+
+                  {selectedFindingId && (() => {
+                    const item = findingDrafts.find(f => (f._id || f.id) === selectedFindingId);
+                    return item ? <FindingEvidence findingId={selectedFindingId!} files={item.proofFiles} canUpload={!auditorBatchSubmitted && item.workflowStatus === "auditor_draft"} onUploaded={() => loadFindingDialogData(findingDialogTarget!)} /> : null;
+                  })()}
+                  {selectedFindingId && (() => {
+                    const selectedFinding = findingDrafts.find(
+                      (item) => (item._id || item.id) === selectedFindingId
+                    );
+
+                    const isUnlockedDraft =
+                      selectedFinding &&
+                      (String(selectedFinding.status).toUpperCase() === "DRAFT" ||
+                        selectedFinding.workflowStatus === "auditor_draft");
+
+                    return !isUnlockedDraft ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                        This finding has already been submitted and cannot be edited through the draft form.
+                      </div>
+                    ) : null;
+                  })()}
+
+                </div>
+
+                <div className="mt-6 flex flex-wrap justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeFindingDialog}
+                    className="rounded-lg border border-outline-variant px-4 py-2 font-semibold text-on-surface hover:bg-surface-container"
+                  >
+                    Close
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={auditorBatchSubmitted || findingLoading || Boolean(findingError) || findingSaving || !findingDescription.trim()}
+                    onClick={handleSaveFindingDraft}
+                    className="rounded-lg bg-primary px-4 py-2 font-semibold text-white disabled:opacity-50"
+                  >
+                    {findingSaving ? "Saving..." : selectedFindingId ? "Save Draft" : "Create Draft"}
+                  </button>
+
+                  {findingLoading ? (
+                    <div role="status" className="rounded-lg border border-outline-variant/30 bg-surface-container-low px-3 py-2 text-sm font-semibold text-on-surface-variant">
+                      Checking submission status…
+                    </div>
+                  ) : findingError ? (
+                    <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                      Submission status could not be verified. Editing and submission are disabled.
+                    </div>
+                  ) : auditorBatchSubmitted ? (
+                    <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-semibold text-green-800">
+                      {findingDrafts.length === 0
+                        ? "Final No Findings submission recorded. This batch is permanently locked."
+                        : "Final submission sent. This batch is permanently locked."}
+                    </div>
+                  ) : (
+                    <button type="button" disabled={findingSubmitting || findingLoading || Boolean(findingError)}
+                      onClick={() => { setBatchAcknowledged(false); setShowBatchConfirm(true); }}
+                      className="rounded-lg bg-green-700 px-4 py-2 font-semibold text-white hover:bg-green-800 disabled:opacity-50">
+                      Confirm &amp; Send All to Lead Auditor
+                    </button>
+                  )}
+                </div>
+
+              </div>
+
+            </div>
+
+            </div>
+
+          </div>
+
+        </div>
+      )}
+
+      {findingDialogTarget && showBatchConfirm && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Confirm final Auditor submission">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="text-xl font-bold text-on-surface">Send All Findings to Lead Auditor?</h3>
+            <p className="mt-3 text-sm text-on-surface-variant">
+              Please review every finding and its evidence once more. Once sent, findings cannot be edited, recalled, unsent or supplemented.
+            </p>
+            <p className="mt-3 text-sm font-semibold text-on-surface">
+              {findingDrafts.length === 0 ? "No Findings: you are confirming an empty submission." : `${findingDrafts.length} finding(s) will be sent together.`}
+            </p>
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-outline-variant p-3 text-sm">
+              <input type="checkbox" checked={batchAcknowledged} onChange={(e) => setBatchAcknowledged(e.target.checked)} className="mt-1" />
+              <span>I have reviewed all findings and understand that this submission is final and cannot be edited or unsent.</span>
+            </label>
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" onClick={() => setShowBatchConfirm(false)} className="rounded-lg border border-outline-variant px-4 py-2">Review Again</button>
+              <button type="button" disabled={!batchAcknowledged || findingSubmitting} onClick={handleSubmitFindingBatch} className="rounded-lg bg-green-700 px-4 py-2 font-semibold text-white disabled:opacity-50">
+                {findingSubmitting ? "Sending..." : "Confirm & Send All"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1263,10 +1967,26 @@ export default function ScheduledAuditsPage() {
               </div>
 
               <div>
+                <label className="font-label-md text-on-surface-variant block mb-1">Lead Auditor</label>
+                <select value={editLeadAuditor} onChange={(e) => setEditLeadAuditor(e.target.value)} disabled={saving} className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 outline-none disabled:bg-gray-100">
+                  <option value="">Select Lead Auditor</option>
+                  {editAuditors.filter((name) => auditors.includes(name)).map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
 
                 <label className="font-label-md text-on-surface-variant block mb-2">
                   Auditors
                 </label>
+
+                {auditorDirectoryError && (
+                  <p role="alert" className="text-sm text-red-600 mb-2">
+                    {auditorDirectoryError}
+                  </p>
+                )}
 
                 <div className="flex flex-wrap gap-2">
 

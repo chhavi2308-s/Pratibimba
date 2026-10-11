@@ -1,3 +1,6 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
+import { FilterText } from "../components/filters/filter-text";
 import { useState, useMemo, useEffect } from "react";
 import {
   useApp,
@@ -8,6 +11,10 @@ import {
   getReports,
   downloadReportPDF,
   submitPrakalpaCorrectiveAction,
+  uploadReportActionProof,
+  downloadReportActionProof,
+  returnReportToPrakalpa,
+  verifyAndCloseReport,
 } from "../services/reportService";
 import {
   getScheduledAudits,
@@ -33,8 +40,11 @@ interface Report {
   severity: "non_conformance" | "open_for_improvement";
   findings: string;
   proofFiles: string[];
+  actionProofFiles?: string[];
   hasChecklist: boolean;
   createdAt: string;
+  reportCreatedOn?: string;
+  reportClosedOn?: string;
   prakalphaPramukh?: string;
   auditor?: string;
   status?: string;
@@ -43,9 +53,16 @@ interface Report {
   completionRemarks?: string;
   closedBy?: string;
   closedAt?: string;
+  workflowStatus?: string;
+  coordinatorVerificationRemarks?: string;
   mailSent?: boolean;
   mailSentAt?: string;
   mailSentTo?: string[];
+  workflowHistory?: Array<{
+    action: string; performedAt?: string; performedBy?: string; role?: string;
+    remarks?: string; actionTakenSnapshot?: string;
+    completionRemarksSnapshot?: string; actionProofFilesSnapshot?: string[];
+  }>;
 }
 
 function downloadCSV(reports: Report[]) {
@@ -85,6 +102,23 @@ function downloadCSV(reports: Report[]) {
   URL.revokeObjectURL(url);
 }
 
+// Calendar-day age, using India-local dates (not elapsed 24-hour periods).
+// Null means that no reliable start date was supplied.
+function reportDaysOpen(start?: string | null, end?: string | null): number | null {
+  if (!start) return null;
+  const first = new Date(start);
+  const last = end ? new Date(end) : new Date();
+  if (!Number.isFinite(first.getTime()) || !Number.isFinite(last.getTime())) return null;
+  const calendarDay = (date: Date) => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(date);
+    const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    return Date.UTC(part("year"), part("month") - 1, part("day"));
+  };
+  return Math.max(0, Math.round((calendarDay(last) - calendarDay(first)) / 86400000));
+}
+
 export default function OpenReportsPage() {
   const { currentUser } = useApp();
   const [reports, setReports] = useState<Report[]>([]);
@@ -109,8 +143,15 @@ export default function OpenReportsPage() {
   // Corrective Action Form State
   const [actionTarget, setActionTarget] = useState<Report | null>(null);
   const [actionTaken, setActionTaken] = useState("");
+  const [actionProof, setActionProof] = useState<File | null>(null);
+  const [actionProofError, setActionProofError] = useState("");
   const [completionRemarks, setCompletionRemarks] = useState("");
   const [closing, setClosing] = useState(false);
+  const [verificationRemarks, setVerificationRemarks] = useState("");
+  const [showIqrHistory, setShowIqrHistory] = useState(false);
+  const [processingVerification, setProcessingVerification] = useState(false);
+  const [workflowNotice, setWorkflowNotice] = useState<{ title: string; message: string; kind: "success" | "error" } | null>(null);
+  const [workflowConfirm, setWorkflowConfirm] = useState<"return" | "close" | null>(null);
 
   // In-App Success Modal State
   const [successOpen, setSuccessOpen] = useState(false);
@@ -158,27 +199,21 @@ export default function OpenReportsPage() {
   };
 
   const handleSendIQAEmail = (iqaNumber: string) => {
-    const audit = scheduledAudits.find(
-      (item) => item.iqaNumber === iqaNumber
-    );
-
-    if (!audit) {
-      alert(
-        `Unable to prepare email because scheduled audit ${iqaNumber} was not found.`
-      );
-      return;
-    }
-
-    const auditId = audit._id || audit.id;
-
-    if (!auditId) {
-      alert("Unable to identify the scheduled audit.");
-      return;
-    }
-
+    // Generated reports are the source for Open Reports email preparation.
+    // The backend independently verifies authorization using report links.
     const groupReports = reports.filter(
       (report) => report.iqaNumber === iqaNumber
     );
+
+    if (groupReports.length === 0) {
+      alert(`No generated reports were found for ${iqaNumber}.`);
+      return;
+    }
+
+    // The IQA-report email modal uses report metadata for its preview.
+    // Its sending endpoint uses the IQA number, not this record's ID.
+    const audit = groupReports[0];
+
 
     const openIQRs = groupReports.filter(
       (report) =>
@@ -290,6 +325,8 @@ export default function OpenReportsPage() {
 
   const handleViewReport = (report: Report) => {
     setDetailTarget(report);
+    setShowIqrHistory(false);
+    setVerificationRemarks("");
   };
 
   const handleDownload = async (report: Report) => {
@@ -301,18 +338,29 @@ export default function OpenReportsPage() {
   };
 
   const handleOpenActionDialog = (report: Report) => {
+    if (currentUser.role !== "prakalpa_manager" ||
+      !["sent_to_prakalpa", "returned_to_prakalpa"].includes(report.workflowStatus || "")) return;
+    setConfirmAction(false);
     setActionTarget(report);
-    setActionTaken("");
-    setCompletionRemarks("");
+    setActionTaken(report.workflowStatus === "returned_to_prakalpa" ? (report.actionTaken || "") : "");
+    setActionProof(null);
+    setActionProofError("");
+    setCompletionRemarks(report.workflowStatus === "returned_to_prakalpa" ? (report.completionRemarks || "") : "");
   };
 
   const handleSubmitCorrectiveAction = async () => {
-    if (!actionTarget || !actionTaken.trim()) return;
+    if (!actionTarget || !actionTaken.trim() || currentUser.role !== "prakalpa_manager") return;
+    setConfirmAction(false);
 
     setClosing(true);
     const iqrNum = actionTarget.iqrNumber;
 
     try {
+      if (actionProof) {
+        setActionProofError("");
+        try { await uploadReportActionProof(actionTarget._id, actionProof); }
+        catch (proofError) { setActionProofError("Proof upload failed. Corrective action was not submitted."); throw proofError; }
+      }
       await submitPrakalpaCorrectiveAction(
         actionTarget._id,
         {
@@ -324,6 +372,7 @@ export default function OpenReportsPage() {
 
       setLastSubmittedNumber(iqrNum);
       setActionTarget(null);
+      setConfirmAction(false);
       setDetailTarget(null);
       setActionTaken("");
       setCompletionRemarks("");
@@ -336,16 +385,48 @@ export default function OpenReportsPage() {
         "Error submitting corrective action:",
         error
       );
-      alert(
-        "Unable to submit corrective action. Please try again."
-      );
+      setWorkflowNotice({ title: "Submission Failed", message: "Unable to submit corrective action. Please try again.", kind: "error" });
     } finally {
       setClosing(false);
     }
   };
 
+  const handleCoordinatorReturn = async () => {
+    if (!detailTarget || currentUser.role !== "audit_coordinator" || detailTarget.workflowStatus !== "action_submitted") return;
+    if (!verificationRemarks.trim()) { setWorkflowNotice({ title: "Remarks Required", message: "Please enter Coordinator remarks before returning this IQR to the Prakalpa Manager.", kind: "error" }); return; }
+    const returnedIqrNumber = detailTarget.iqrNumber;
+    setProcessingVerification(true);
+    try {
+      await returnReportToPrakalpa(detailTarget._id, { coordinatorVerificationRemarks: verificationRemarks.trim() });
+      await loadReports();
+      setDetailTarget(null);
+      setVerificationRemarks("");
+      setWorkflowNotice({ title: "Returned to Prakalpa Manager", message: `${returnedIqrNumber} was returned for correction. The IQR remains open.`, kind: "success" });
+    } catch (error) { console.error(error); setWorkflowNotice({ title: "Return Failed", message: "Unable to return Actions Taken. Please try again.", kind: "error" }); }
+    finally { setProcessingVerification(false); }
+  };
+
+  const handleCoordinatorClose = async () => {
+    if (!detailTarget || currentUser.role !== "audit_coordinator" || detailTarget.workflowStatus !== "action_submitted") return;
+
+    const closedIqrNumber = detailTarget.iqrNumber;
+    setProcessingVerification(true);
+    try {
+      await verifyAndCloseReport(detailTarget._id, { coordinatorVerificationRemarks: verificationRemarks.trim() });
+      await loadReports();
+      setDetailTarget(null);
+      setVerificationRemarks("");
+      setWorkflowNotice({ title: "IQR Verified & Closed", message: `${closedIqrNumber} has been verified and formally closed.`, kind: "success" });
+    } catch (error) { console.error(error); setWorkflowNotice({ title: "Closure Failed", message: "Unable to verify and close this IQR. Please try again.", kind: "error" }); }
+    finally { setProcessingVerification(false); }
+  };
+
   const isAuditor = currentUser.role === "auditor";
   const isManager = currentUser.role === "prakalpa_manager";
+  const isCoordinator = currentUser.role === "audit_coordinator";
+  const canSubmitAction = (report: Report) => isManager &&
+    ["sent_to_prakalpa", "returned_to_prakalpa"].includes(report.workflowStatus || "");
+  const [confirmAction, setConfirmAction] = useState(false);
 
   // Filter for reports that are open (or missing status field)
   const openReports = useMemo(() => {
@@ -353,6 +434,12 @@ export default function OpenReportsPage() {
       (r) => !r.status || r.status.toLowerCase() === "open"
     );
   }, [reports]);
+
+  const filterReports = useMemo(() => reports.filter(r =>
+    (!r.status || r.status.toLowerCase() === "open") && (isManager ? r.prakalpa === currentUser.prakalpa : isAuditor ? (r.auditors || []).includes(currentUser.name || "") || r.auditor === currentUser.name : true)
+  ), [reports, isManager, isAuditor, currentUser]);
+  const filterPrakalpaOptions = useMemo(() => [...new Set(filterReports.map(r => r.prakalpa).filter(Boolean))], [filterReports]);
+  const filterCoordinatorOptions = useMemo(() => [...new Set(filterReports.map(r => r.auditCoordinator).filter(Boolean))], [filterReports]);
 
   const filtered = useMemo(() => {
     return openReports.filter((r) => {
@@ -469,10 +556,8 @@ export default function OpenReportsPage() {
 
   const redFlaggedCount = useMemo(() => {
     return filtered.filter((r) => {
-      const days = Math.floor(
-        (Date.now() - new Date(r.createdAt).getTime()) / 86400000
-      );
-      return days > 30;
+      const days = reportDaysOpen(r.reportCreatedOn || r.createdAt);
+      return days !== null && days > 30;
     }).length;
   }, [filtered]);
 
@@ -566,71 +651,20 @@ export default function OpenReportsPage() {
       )}
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-outline-variant/20 shadow-soft flex flex-wrap gap-3 items-center">
-        <div className="relative w-full sm:flex-1 sm:min-w-[180px]">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">
-            search
-          </span>
-          <input
-            type="text"
-            placeholder="Search open reports..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest"
-          />
-        </div>
-        <input
-          type="text"
-          placeholder="Report ID (IQR)"
-          value={filterReportId}
-          onChange={(e) => setFilterReportId(e.target.value)}
-          className="w-full sm:w-36 border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-        />
-        {!isManager && (
-          <select
-            value={filterPrakalpa}
-            onChange={(e) => setFilterPrakalpa(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Prakalpas</option>
-            {PRAKALPAS.map((d) => (
-              <option key={d}>{d}</option>
-            ))}
-          </select>
-        )}
-        <select
-          value={filterClassification}
-          onChange={(e) => setFilterClassification(e.target.value)}
-          className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-        >
-          <option value="All">All Types</option>
-          <option value="NC">NC</option>
-          <option value="OFI">OFI</option>
-        </select>
-        <select
-          value={filterCoordinator}
-          onChange={(e) => setFilterCoordinator(e.target.value)}
-          className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-        >
-          <option value="All">All Coordinators</option>
-          {AUDIT_COORDINATORS.map((c) => (
-            <option key={c}>{c}</option>
-          ))}
-        </select>
-        {(search ||
-          filterReportId ||
-          filterPrakalpa !== "All" ||
-          filterClassification !== "All" ||
-          filterStatus !== "All" ||
-          filterCoordinator !== "All") && (
-          <button
-            onClick={clearFilters}
-            className="font-label-md text-on-surface-variant/60 hover:text-primary"
-          >
-            Clear
-          </button>
-        )}
-      </div>
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search open reports..." }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : []),
+            ...(filterReportId !== "" ? [{ key: "filterReportId", label: "IQR ID", value: filterReportId, onRemove: () => setFilterReportId("") }] : []),
+            ...(!isManager && filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : []),
+            ...(filterClassification !== "All" ? [{ key: "filterClassification", label: "Classification", value: filterClassification, onRemove: () => setFilterClassification("All") }] : []),
+            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : [])
+          ]}
+          onClearAll={clearFilters} resultCount={filtered.length} resultLabel="open reports shown">
+          <FilterText label="IQR ID" value={filterReportId} onChange={setFilterReportId} placeholder="Partial IQR ID" />
+          {!isManager && <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={filterPrakalpaOptions.map(value => ({ value, label: value }))} searchable allLabel="All Prakalpas" />}
+          <FilterSelect label="Classification" value={filterClassification} onChange={setFilterClassification} options={[{ value: "NC", label: "NC" }, { value: "OFI", label: "OFI" }]} allLabel="All Types" />
+          <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={filterCoordinatorOptions.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
+        </FilterToolbar>
 
       {/* Open Reports grouped by IQA */}
       {filtered.length === 0 ? (
@@ -662,17 +696,12 @@ export default function OpenReportsPage() {
 
             const oldestDays = Math.max(
               ...group.reports.map((report) =>
-                Math.max(
-                  0,
-                  Math.floor(
-                    (Date.now() - new Date(report.createdAt).getTime()) /
-                      86400000
-                  )
-                )
+                reportDaysOpen(report.reportCreatedOn || report.createdAt) ?? 0
               )
             );
 
             const expanded = !!expandedIQAs[group.iqaNumber];
+            const reviewCount = isCoordinator ? group.reports.filter(r => r.workflowStatus === "action_submitted").length : 0;
 
             return (
               <div
@@ -684,7 +713,7 @@ export default function OpenReportsPage() {
                 }`}
               >
                 {/* IQA Summary Row */}
-                <button
+                <button title="Notify about report created"
                   type="button"
                   onClick={() => toggleIQA(group.iqaNumber)}
                   className="w-full p-4 sm:p-5 text-left hover:bg-surface-container-lowest transition-colors"
@@ -703,6 +732,7 @@ export default function OpenReportsPage() {
                             {group.iqaNumber}
                           </span>
 
+                          {reviewCount > 0 && <span className="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-900" title="Click to expand IQRs awaiting review">{reviewCount} Needs Review</span>}
                           {oldestDays > 30 && (
                             <span
                               className="material-symbols-outlined text-error text-[17px]"
@@ -773,44 +803,40 @@ export default function OpenReportsPage() {
                         Open
                       </span>
 
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleSendIQAEmail(group.iqaNumber);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
+                      {isCoordinator && (group.reports.every((report) => report.mailSent) ? (
+                        <span
+                          className="inline-flex items-center justify-center rounded-full w-10 h-10 bg-blue-50 border border-blue-300 text-blue-600 shadow-sm"
+                          title="Sent Email Successfully"
+                          aria-label="Sent Email Successfully"
+                        >
+                          <span className="material-symbols-outlined text-[21px]">
+                            mark_email_read
+                          </span>
+                        </span>
+                      ) : (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(event) => {
                             event.stopPropagation();
                             handleSendIQAEmail(group.iqaNumber);
-                          }
-                        }}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-white text-[11px] font-bold hover:brightness-110 transition-all cursor-pointer whitespace-nowrap"
-                        title={
-                          scheduledAudits.find(
-                            (audit) => audit.iqaNumber === group.iqaNumber
-                          )?.mailSent
-                            ? "Resend IQA Email"
-                            : "Send IQA Email"
-                        }
-                      >
-                        <span className="material-symbols-outlined text-[16px]">
-                          {scheduledAudits.find(
-                            (audit) => audit.iqaNumber === group.iqaNumber
-                          )?.mailSent
-                            ? "mark_email_read"
-                            : "mail"}
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              handleSendIQAEmail(group.iqaNumber);
+                            }
+                          }}
+                          className="inline-flex items-center justify-center rounded-full w-10 h-10 bg-amber-50 border border-amber-300 text-amber-600 shadow-sm hover:bg-amber-100 hover:shadow-md transition-all cursor-pointer"
+                          title="Send Email"
+                          aria-label="Send Email"
+                        >
+                          <span className="material-symbols-outlined text-[21px]">
+                            mail
+                          </span>
                         </span>
-
-                        {scheduledAudits.find(
-                          (audit) =>
-                            audit.iqaNumber === group.iqaNumber
-                        )?.mailSent
-                          ? "Resend Email"
-                          : "Send Email"}
-                      </span>
+                      ))}
                     </div>
                   </div>
                 </button>
@@ -843,14 +869,7 @@ export default function OpenReportsPage() {
 
                         <tbody className="divide-y divide-outline-variant/10">
                           {group.reports.map((report) => {
-                            const days = Math.max(
-                              0,
-                              Math.floor(
-                                (Date.now() -
-                                  new Date(report.createdAt).getTime()) /
-                                  86400000
-                              )
-                            );
+                            const days = reportDaysOpen(report.reportCreatedOn || report.createdAt) ?? 0;
 
                             const assignedAuditors =
                               report.auditors &&
@@ -949,20 +968,43 @@ export default function OpenReportsPage() {
 
                                 <td className="px-4 py-3">
                                   <div className="flex items-center gap-1">
-                                    {/* Close */}
-                                    <button
-                                      type="button"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        handleOpenActionDialog(report);
-                                      }}
-                                      className="p-2 rounded-lg transition-all hover:scale-110 hover:bg-error/10 text-error"
-                                      title="Submit Corrective Action"
-                                    >
-                                      <span className="material-symbols-outlined text-[18px]">
-                                        task_alt
+                                    {/* Manager: one icon only, based on this IQR's workflow status. */}
+                                    {canSubmitAction(report) ? (
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          handleOpenActionDialog(report);
+                                        }}
+                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-300 bg-amber-50 text-amber-700 transition-all hover:bg-amber-100 hover:shadow-sm"
+                                        title={report.workflowStatus === "returned_to_prakalpa" ? "Revise and Resend Actions Taken" : "Send Actions Taken"}
+                                        aria-label={report.workflowStatus === "returned_to_prakalpa" ? "Revise and Resend Actions Taken" : "Send Actions Taken"}
+                                      >
+                                        <span className="material-symbols-outlined text-[18px]">send</span>
+                                      </button>
+                                    ) : isManager && report.workflowStatus === "action_submitted" ? (
+                                      <span
+                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-slate-500 cursor-default"
+                                        title="Awaiting Audit Coordinator Review"
+                                        aria-label="Awaiting Audit Coordinator Review"
+                                      >
+                                        <span className="material-symbols-outlined text-[18px]">schedule</span>
                                       </span>
-                                    </button>
+                                    ) : null}
+
+                                    {/* Coordinator: per-IQR action in Open Reports */}
+                                    {isCoordinator && report.workflowStatus === "action_submitted" ? (
+                                      <button type="button" onClick={(event) => { event.stopPropagation(); handleViewReport(report); }}
+                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                        title="Review Actions Taken / Verify & Close" aria-label={`Review ${report.iqrNumber}`}>
+                                        <span className="material-symbols-outlined text-[18px]">task_alt</span>
+                                      </button>
+                                    ) : isCoordinator && ["sent_to_prakalpa", "returned_to_prakalpa"].includes(report.workflowStatus || "") ? (
+                                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-slate-500 cursor-default"
+                                        title="Waiting for Prakalpa Actions Taken" aria-label={`Waiting for ${report.iqrNumber}`}>
+                                        <span className="material-symbols-outlined text-[18px]">schedule</span>
+                                      </span>
+                                    ) : null}
 
                                     {/* View */}
                                     <button
@@ -1178,11 +1220,26 @@ export default function OpenReportsPage() {
                 </div>
               </div>
 
+              {/* pratibimba-iqr-history-v1: complete IQR event timeline */}
+              {!!detailTarget.workflowHistory?.length && <div className="space-y-3">
+                <button type="button" onClick={() => setShowIqrHistory(v => !v)} aria-expanded={showIqrHistory} className="rounded-lg border border-primary/20 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/5">{showIqrHistory ? "Hide History" : "View History"} ({detailTarget.workflowHistory.length} events)</button>
+                {showIqrHistory && <div className="space-y-3 rounded-xl border p-4">
+                  <h3 className="font-semibold">Corrective Action and Coordinator Review History</h3>
+                  {[...detailTarget.workflowHistory].sort((a,b) => new Date(a.performedAt || 0).getTime() - new Date(b.performedAt || 0).getTime()).map((entry,index) => <div key={`${entry.performedAt || "event"}-${index}`} className="rounded-lg border bg-white p-3 space-y-2">
+                    <div className="flex flex-wrap justify-between gap-2"><strong className="text-sm">{entry.action === "action_submitted" ? "Actions Taken Submitted" : entry.action === "returned_to_prakalpa" ? "Returned for Correction" : entry.action.replace(/_/g," ")}</strong><span className="text-xs text-on-surface-variant">{entry.performedAt ? new Date(entry.performedAt).toLocaleString("en-IN") : "Date unavailable"}</span></div>
+                    <p className="text-xs text-on-surface-variant">{entry.performedBy || "User"}</p>
+                    {entry.action === "action_submitted" && (entry.actionTakenSnapshot ? <p className="whitespace-pre-wrap text-sm"><strong>Actions Taken: </strong>{entry.actionTakenSnapshot}</p> : <p className="text-xs text-on-surface-variant">Original Actions Taken text was not saved in this older event.</p>)}
+                    {entry.completionRemarksSnapshot && <p className="whitespace-pre-wrap text-sm"><strong>Completion Remarks: </strong>{entry.completionRemarksSnapshot}</p>}
+                    {!!entry.actionProofFilesSnapshot?.length && <div className="text-sm"><strong>Evidence: </strong>{entry.actionProofFilesSnapshot.map((token,i) => <button type="button" key={`${token}-${i}`} onClick={() => void downloadReportActionProof(detailTarget._id,token)} className="ml-2 text-primary underline">Proof {i+1}</button>)}</div>}
+                    {entry.remarks && <p className="whitespace-pre-wrap text-sm"><strong>{entry.action === "returned_to_prakalpa" ? "Coordinator Remarks" : "Remarks"}: </strong>{entry.remarks}</p>}
+                  </div>)}
+                </div>}
+              </div>}
               {/* Corrective Action Details if present */}
               {detailTarget.actionTaken && (
                 <div>
                   <p className="font-semibold text-on-surface mb-2">
-                    Corrective Action Taken
+                    Current Actions Taken (Latest)
                   </p>
                   <div className="rounded-xl border border-secondary/20 bg-secondary/5 p-5 whitespace-pre-wrap font-body-md text-on-surface leading-relaxed">
                     {detailTarget.actionTaken}
@@ -1218,7 +1275,28 @@ export default function OpenReportsPage() {
                 </div>
               )}
 
+              {/* Coordinator verification is per-IQR; actions only become available after submission. */}
+              {isCoordinator && detailTarget.workflowStatus === "action_submitted" && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 space-y-3">
+                  <h3 className="font-semibold text-emerald-900">Review Actions Taken — {detailTarget.iqrNumber}</h3>
+                  <p className="text-sm text-emerald-900">Review the submitted corrective action and proof above before closing or returning this IQR.</p>
+                  <label htmlFor="open-report-verification-remarks" className="block text-sm font-semibold">Coordinator Remarks</label>
+                  <textarea id="open-report-verification-remarks" value={verificationRemarks} onChange={(e) => setVerificationRemarks(e.target.value)} rows={3}
+                    disabled={processingVerification} placeholder="Required when returning for correction" className="w-full rounded-lg border border-emerald-200 p-3 text-sm" />
+                  <div className="flex flex-wrap justify-end gap-3">
+                    <button type="button" disabled={processingVerification} onClick={() => setWorkflowConfirm("return")}
+                      className="rounded-lg border border-amber-400 px-4 py-2 text-amber-800 disabled:opacity-50">Return to Prakalpa Manager</button>
+                    <button type="button" disabled={processingVerification} onClick={() => setWorkflowConfirm("close")}
+                      className="rounded-lg bg-emerald-700 px-4 py-2 text-white disabled:opacity-50">Verify &amp; Close IQR</button>
+                  </div>
+                </div>
+              )}
+              {isCoordinator && ["sent_to_prakalpa", "returned_to_prakalpa"].includes(detailTarget.workflowStatus || "") && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Waiting for Prakalpa Actions Taken. Verification is unavailable for this IQR.</p>
+              )}
+
               {/* Evidence Files Section */}
+              {!!detailTarget.actionProofFiles?.length && <div className="space-y-2"><p className="font-semibold">Corrective-Action Proof</p>{detailTarget.actionProofFiles.map((token, index) => <button key={token} type="button" className="block text-sm text-primary underline" onClick={() => void downloadReportActionProof(detailTarget._id, token)}>View action proof {index + 1}</button>)}</div>}
               {detailTarget.proofFiles && detailTarget.proofFiles.length > 0 && (
                 <div>
                   <p className="font-semibold text-on-surface mb-2">Evidence Files</p>
@@ -1254,7 +1332,7 @@ export default function OpenReportsPage() {
               </div>
 
               <div className="flex gap-2">
-                {detailTarget.status !== "closed" && (
+                {canSubmitAction(detailTarget) && (
                   <button
                     onClick={() => handleOpenActionDialog(detailTarget)}
                     className="px-5 py-2 bg-error text-white rounded-lg font-bold hover:brightness-110 transition-all font-label-md"
@@ -1274,22 +1352,60 @@ export default function OpenReportsPage() {
         </div>
       )}
 
+      {workflowConfirm && detailTarget && isCoordinator && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Coordinator confirmation">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4 max-h-[85vh] overflow-y-auto overscroll-contain">
+            <h3 className="text-lg font-bold text-on-surface">{workflowConfirm === "return" ? "Return to Prakalpa Manager?" : `Verify & Close ${detailTarget.iqrNumber}?`}</h3>
+            <p className="text-sm text-on-surface-variant">{workflowConfirm === "return" ? `Return ${detailTarget.iqrNumber} to the Prakalpa Manager for correction? The IQR will remain open and your remarks will be saved.` : `Verify the submitted Actions Taken and formally close ${detailTarget.iqrNumber}? Only this IQR will be closed.`}</p>
+            {workflowConfirm === "return" && !verificationRemarks.trim() && <p className="text-sm text-error">Coordinator remarks are required to return an IQR.</p>}
+            <div className="flex justify-end gap-3">
+              <button type="button" disabled={processingVerification} onClick={() => setWorkflowConfirm(null)} className="rounded-lg border border-outline-variant px-4 py-2">Cancel</button>
+              <button type="button" disabled={processingVerification || (workflowConfirm === "return" && !verificationRemarks.trim())}
+                onClick={async () => { const operation = workflowConfirm; setWorkflowConfirm(null); if (operation === "return") await handleCoordinatorReturn(); else await handleCoordinatorClose(); }}
+                className="rounded-lg bg-primary px-4 py-2 text-white disabled:opacity-50">{processingVerification ? "Processing..." : workflowConfirm === "return" ? "Confirm Return" : "Confirm & Close IQR"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {workflowNotice && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="alertdialog" aria-modal="true" aria-label={workflowNotice.title}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4 text-center">
+            <span className={`material-symbols-outlined text-[42px] ${workflowNotice.kind === "success" ? "text-emerald-700" : "text-error"}`}>{workflowNotice.kind === "success" ? "check_circle" : "error"}</span>
+            <h3 className="text-lg font-bold text-on-surface">{workflowNotice.title}</h3>
+            <p className="text-sm text-on-surface-variant">{workflowNotice.message}</p>
+            <button type="button" onClick={() => setWorkflowNotice(null)} className="rounded-lg bg-primary px-6 py-2 text-white">OK</button>
+          </div>
+        </div>
+      )}
+
       {/* Corrective Action Submission Dialog */}
-      {actionTarget && (
+      {actionTarget && isManager && (
         <div className="fixed inset-0 flex items-center justify-center z-[60] p-4">
           <div
             className="absolute inset-0 bg-black/50"
             onClick={() => setActionTarget(null)}
           />
-          <div className="relative bg-white rounded-2xl shadow-floating w-full max-w-lg z-10 p-6 space-y-4">
+          <div className="relative bg-white rounded-2xl shadow-floating w-full max-w-lg z-10 p-6 space-y-4 max-h-[85vh] overflow-y-auto overscroll-contain">
             <div className="border-b border-outline-variant/10 pb-3">
               <h3 className="font-headline-sm text-on-surface">
-                Submit Corrective Action — {actionTarget.iqrNumber}
+                {actionTarget.workflowStatus === "returned_to_prakalpa" ? "Update & Resubmit Corrective Action" : "Submit Corrective Action"} — {actionTarget.iqrNumber}
               </h3>
               <p className="text-xs text-on-surface-variant mt-1 font-body-md">
                 Please enter the corrective action taken for this audit finding.
               </p>
             </div>
+
+              {actionTarget.workflowStatus === "returned_to_prakalpa" && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-2" role="note">
+                  <div className="flex items-center gap-2 text-amber-900 font-semibold text-sm">
+                    <span className="material-symbols-outlined text-[19px]">feedback</span>
+                    Audit Coordinator's Return Remarks
+                  </div>
+                  <p className="text-sm text-amber-950 whitespace-pre-wrap">{actionTarget.coordinatorVerificationRemarks?.trim() || "The Coordinator returned this IQR for correction, but no return remarks were included in the report response. Contact the Audit Coordinator if clarification is needed."}</p>
+                  <p className="text-xs text-amber-800">Review this feedback, update Actions Taken, and resubmit for verification.</p>
+                </div>
+              )}
 
             {/* Audit Finding Card */}
             <div className="rounded-lg bg-surface-container-low p-3 border border-outline-variant/20">
@@ -1329,6 +1445,27 @@ export default function OpenReportsPage() {
               </div>
             </div>
 
+            <div className="space-y-2">
+              <label className="block text-xs font-label-md font-semibold text-on-surface-variant">Supporting Proof (Optional — PDF, PNG, JPEG or WebP, max 8 MB)</label>
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-outline-variant/40 bg-surface-container-low/40 px-4 py-5 text-center hover:border-primary/60 hover:bg-primary/5">
+                <span className="material-symbols-outlined text-[28px] text-primary">cloud_upload</span>
+                <span className="text-sm font-semibold text-on-surface">{actionProof ? actionProof.name : "Choose supporting evidence"}</span>
+                <span className="text-xs text-on-surface-variant">{actionProof ? `${(actionProof.size / 1024 / 1024).toFixed(2)} MB selected` : "PDF, PNG, JPEG or WebP · Max 8 MB"}</span>
+                <span className="rounded-lg border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary">Browse File</span>
+                <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" className="sr-only"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    if (file && (file.size > 8 * 1024 * 1024 || !["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(file.type))) {
+                      setActionProof(null); setActionProofError("Select a PDF, PNG, JPEG or WebP file of at most 8 MB."); e.target.value = ""; return;
+                    }
+                    setActionProof(file); setActionProofError("");
+                  }} />
+              </label>
+              {actionProof && <button type="button" onClick={() => setActionProof(null)} className="text-xs text-error underline">Remove selected file</button>}
+              {actionProofError && <p className="text-xs text-error" role="alert">{actionProofError}</p>}
+              {!!actionTarget.actionProofFiles?.length && <div className="space-y-1"><p className="text-xs font-semibold">Previously uploaded action proof</p>{actionTarget.actionProofFiles.map((token, index) => <button key={token} type="button" className="block text-xs text-primary underline" onClick={() => void downloadReportActionProof(actionTarget._id, token)}>View action proof {index + 1}</button>)}</div>}
+            </div>
+
             {/* Confirmation Banner */}
             <div className="rounded-lg border border-error/20 bg-error/5 p-3">
               <div className="flex gap-2.5 items-start">
@@ -1357,14 +1494,28 @@ export default function OpenReportsPage() {
               <button
                 type="button"
                 disabled={!actionTaken.trim() || closing}
-                onClick={handleSubmitCorrectiveAction}
+                onClick={() => setConfirmAction(true)}
                 className="px-5 py-2 rounded-lg bg-error text-white font-bold hover:brightness-110 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm flex items-center gap-2 font-label-md"
               >
                 <span className="material-symbols-outlined text-[18px]">
                   task_alt
                 </span>
-                {closing ? "Submitting..." : "Submit Action"}
+                {closing ? "Submitting..." : "Confirm & Send to Audit Coordinator"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-app confirmation: never submit evidence or action before confirmation. */}
+      {confirmAction && actionTarget && isManager && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Confirm corrective action submission">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4 max-h-[85vh] overflow-y-auto overscroll-contain">
+            <h3 className="font-bold text-lg">Confirm & Send Actions Taken</h3>
+            <p className="text-sm">Submit Actions Taken for {actionTarget.iqrNumber} to the Audit Coordinator? You cannot edit this IQR after submission unless the Coordinator returns it for correction.</p>
+            <div className="flex justify-end gap-3">
+              <button type="button" disabled={closing} onClick={() => setConfirmAction(false)} className="px-4 py-2 rounded-lg border">Cancel</button>
+              <button type="button" disabled={closing || !actionTaken.trim()} onClick={handleSubmitCorrectiveAction} className="px-4 py-2 rounded-lg bg-primary text-white disabled:opacity-50">{closing ? "Sending..." : "Confirm & Send"}</button>
             </div>
           </div>
         </div>
@@ -1387,12 +1538,12 @@ export default function OpenReportsPage() {
             </div>
 
             <h3 className="font-headline-sm text-on-surface mb-2">
-              Report Closed Successfully
+              Actions Taken Submitted Successfully
             </h3>
 
             <p className="text-on-surface-variant text-sm font-body-md mb-6 leading-relaxed">
-              {lastSubmittedNumber ? `${lastSubmittedNumber} has been closed. ` : ""}
-              The report has been marked as closed and moved to All Reports.
+              {lastSubmittedNumber ? `${lastSubmittedNumber} has been sent to the Audit Coordinator for review. ` : ""}
+              The IQR remains open until the Audit Coordinator verifies and formally closes it.
             </p>
 
             <button

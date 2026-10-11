@@ -13,6 +13,7 @@ export interface Prakalpa {
 
 export interface PrakalpaPayload {
   name: string;
+  initialLocation?: string;
   auditAreas?: string[];
   prakalpaPramukh?: string;
   prakalpaPramukhEmail?: string;

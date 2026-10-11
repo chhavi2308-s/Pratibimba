@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { useApp, PRAKALPAS } from "../context/app-context";
 
 export default function DashboardPage() {
-  const { auditPlans, scheduledAudits, reports, getDaysOpen, isRedFlagged, isOverdue, refreshLiveData } = useApp();
+  const { currentUser, auditPlans, scheduledAudits, reports, getDaysOpen, isRedFlagged, isOverdue, refreshLiveData } = useApp();
   const [lastRefreshed, setLastRefreshed] = useState<string>(new Date().toLocaleTimeString());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -58,6 +58,17 @@ export default function DashboardPage() {
   const overdueNCPct = ncOpen.length > 0 ? Math.round((overdueNCs.length / ncOpen.length) * 100) : 0;
   const closureRate = reports.length > 0 ? Math.round((closedReports.length / reports.length) * 100) : 0;
 
+  const myAssignedAudits =
+    currentUser.role === "auditor"
+      ? scheduledAudits.filter((audit) =>
+          (audit.auditors || []).includes(currentUser.name)
+        )
+      : [];
+
+  const myLeadAudits = myAssignedAudits.filter(
+    (audit) => audit.leadAuditor === currentUser.name
+  );
+
   const activeScheduled = scheduledAudits.filter((s) => {
     const now = new Date(); return new Date(s.startDate) <= now && new Date(s.endDate) >= now;
   });
@@ -85,6 +96,50 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {currentUser.role === "auditor" && (
+        <section className="bg-white rounded-xl border border-outline-variant/20 shadow-soft p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-headline-sm text-on-surface">
+                My Audit Responsibilities
+              </h3>
+              <p className="font-body-md text-on-surface-variant mt-1">
+                You are Lead Auditor for {myLeadAudits.length} audit(s)
+                and Team Auditor for {myAssignedAudits.length - myLeadAudits.length} audit(s).
+              </p>
+            </div>
+            <Link
+              href="/scheduled-audits"
+              className="px-4 py-2 bg-primary text-on-primary rounded-lg font-label-md font-bold"
+            >
+              View My Audits
+            </Link>
+          </div>
+
+          {myLeadAudits.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {myLeadAudits.map((audit) => (
+                <span
+                  key={audit.id || audit._id || audit.iqaNumber}
+                  className="px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-bold"
+                >
+                  {audit.iqaNumber} · Lead Auditor
+                </span>
+              ))}
+            </div>
+          )}
+
+          {myLeadAudits.length > 0 && (
+            <Link
+              href="/lead-findings"
+              className="inline-block mt-4 text-primary font-label-md font-bold hover:underline"
+            >
+              Review Findings →
+            </Link>
+          )}
+        </section>
+      )}
 
       {/* Prakalpa Coverage */}
       <section>
@@ -293,6 +348,14 @@ export default function DashboardPage() {
                 const now = new Date();
                 const isOngoing = new Date(audit.startDate) <= now && new Date(audit.endDate) >= now;
                 const isUpcoming = new Date(audit.startDate) > now;
+                const isMyLeadAssignment =
+                  currentUser.role === "auditor" &&
+                  audit.leadAuditor === currentUser.name &&
+                  (audit.auditors || []).includes(currentUser.name);
+                const isMyTeamAssignment =
+                  currentUser.role === "auditor" &&
+                  !isMyLeadAssignment &&
+                  (audit.auditors || []).includes(currentUser.name);
                 const auditReports = reports.filter((r) => r.iqaNumber === audit.iqaNumber);
                 const ncCount = auditReports.filter((r) => r.severity === "non_conformance").length;
                 const ofiCount = auditReports.filter((r) => r.severity === "open_for_improvement").length;
@@ -304,6 +367,16 @@ export default function DashboardPage() {
                     <div className="flex-1 min-w-0">
                       <p className="font-data-mono text-[11px] text-primary font-bold">{audit.iqaNumber}</p>
                       <p className="font-body-md font-medium text-on-surface truncate">{audit.prakalpa} — {audit.location}</p>
+                      {isMyLeadAssignment && (
+                        <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-bold">
+                          Lead Auditor
+                        </span>
+                      )}
+                      {isMyTeamAssignment && (
+                        <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-secondary/10 text-secondary text-[10px] font-bold">
+                          Team Auditor
+                        </span>
+                      )}
                       <div className="flex gap-2 mt-0.5">
                         {ncCount > 0 && <span className="font-label-md text-[10px] text-error">NC:{ncCount}</span>}
                         {ofiCount > 0 && <span className="font-label-md text-[10px] text-primary">OFI:{ofiCount}</span>}

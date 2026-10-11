@@ -1,6 +1,9 @@
 import { useLocation } from "wouter";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getReports } from "../services/reportService";
+import { getCoordinatorFindingSummaries } from "../services/auditFindingService";
 import { useApp } from "../context/app-context";
+import { isRoleAllowed } from "./role-route-guard";
 
 const breadcrumbMap: Record<string, string> = {
   "/dashboard":       "Dashboard",
@@ -10,22 +13,23 @@ const breadcrumbMap: Record<string, string> = {
   "/all-reports":     "All Reports",
   "/open-reports":    "Open Reports",
   "/iqa-summary":     "IQA Summary",
-  "/role-access":     "Role Access",
+  "/role-access":     "Roles & Permissions",
+  "/lead-auditor-assignments": "Lead Auditor Assignments",
   "/user-management": "User Management",
   "/prakalpa-management": "Prakalpa Management",
 };
 
 export const ROLE_LABELS: Record<string, string> = {
+  super_admin:       "Super Admin",
   admin:             "Admin",
-  lead_auditor:      "Lead Auditor",
   audit_coordinator: "Audit Coordinator",
   auditor:           "Auditor",
   prakalpa_manager:  "Manager",
 };
 
 const ROLE_BADGE: Record<string, string> = {
+  super_admin:       "bg-error/10 text-error",
   admin:             "bg-error/10 text-error",
-  lead_auditor:      "bg-primary/10 text-primary",
   audit_coordinator: "bg-tertiary/10 text-tertiary",
   auditor:           "bg-secondary/10 text-secondary",
   prakalpa_manager:  "bg-surface-container text-on-surface-variant",
@@ -38,7 +42,26 @@ export function TopNav() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const [pendingReview, setPendingReview] = useState({ findings: 0, actions: 0 });
+  useEffect(() => {
+    if (currentUser.role !== "audit_coordinator") { setPendingReview({ findings: 0, actions: 0 }); return; }
+    let active = true;
+    const refresh = async () => {
+      try {
+        const [summaries, reports] = await Promise.all([getCoordinatorFindingSummaries(), getReports()]);
+        if (active) setPendingReview({
+          findings: summaries.reduce((total, item) => total + (Number(item.awaitingReview) || 0), 0),
+          actions: (Array.isArray(reports) ? reports : []).filter((report: { workflowStatus?: string }) => report.workflowStatus === "action_submitted").length,
+        });
+      } catch { /* Do not show misleading stale pending counts on failure. */
+        if (active) setPendingReview({ findings: 0, actions: 0 });
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 60000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [currentUser.role, currentUser.name]);
+  const unreadCount = notifications.filter((n) => !n.read).length + pendingReview.findings + pendingReview.actions;
 
   const breadcrumbs = (() => {
     if (!pathname) return [];
@@ -54,7 +77,6 @@ export function TopNav() {
   })();
 
   const roleLabel = ROLE_LABELS[currentUser.role] ?? currentUser.role;
-  const roleBadge = ROLE_BADGE[currentUser.role] ?? "bg-surface-container text-on-surface-variant";
 
   return (
     <header className="sticky top-0 z-40 w-full min-h-16 bg-surface border-b border-outline-variant/20 flex justify-between items-center px-3 sm:px-4 md:px-8">
@@ -89,10 +111,6 @@ export function TopNav() {
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2 md:gap-3 shrink-0">
-        <span className={`hidden sm:inline-flex px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${roleBadge}`}>
-          {roleLabel}
-        </span>
-
         {/* Notification Bell */}
         <div className="relative">
           <button
@@ -119,7 +137,13 @@ export function TopNav() {
                     </button>
                   )}
                 </div>
-                {notifications.length === 0 ? (
+                {currentUser.role === "audit_coordinator" && (pendingReview.findings > 0 || pendingReview.actions > 0) && (
+                  <div className="p-3 space-y-2 border-b border-outline-variant/20">
+                    {pendingReview.findings > 0 && <button type="button" className="block w-full text-left rounded-lg bg-primary/5 px-3 py-2 hover:bg-primary/10" onClick={() => { setShowNotifications(false); setLocation("/scheduled-audits"); }}><span className="font-bold text-sm">{pendingReview.findings} Lead-approved findings</span><span className="block text-xs text-on-surface-variant">Awaiting Coordinator review · Open Scheduled Audits</span></button>}
+                    {pendingReview.actions > 0 && <button type="button" className="block w-full text-left rounded-lg bg-primary/5 px-3 py-2 hover:bg-primary/10" onClick={() => { setShowNotifications(false); setLocation("/all-reports"); }}><span className="font-bold text-sm">{pendingReview.actions} corrective actions</span><span className="block text-xs text-on-surface-variant">Awaiting Coordinator verification · Open All Reports</span></button>}
+                  </div>
+                )}
+                {notifications.length === 0 && pendingReview.findings === 0 && pendingReview.actions === 0 ? (
                   <div className="p-6 text-center text-on-surface-variant/50 font-body-md">No notifications</div>
                 ) : (
                   <div className="max-h-80 overflow-y-auto divide-y divide-outline-variant/10">
@@ -165,11 +189,7 @@ export function TopNav() {
             </p>
           </div>
 
-          <span
-            className={`hidden sm:inline-flex px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${roleBadge}`}
-          >
-            {roleLabel}
-          </span>
+
         </div>
       </div>
 
@@ -185,22 +205,22 @@ export function TopNav() {
           <div className="md:hidden fixed left-0 right-0 top-16 z-50 bg-secondary shadow-xl border-t border-white/10 max-h-[calc(100vh-4rem)] overflow-y-auto">
             <div className="p-3 space-y-1">
               {[
-                { label: "Dashboard", href: "/dashboard", icon: "dashboard", roles: ["lead_auditor", "audit_coordinator", "auditor", "prakalpa_manager", "admin"] },
+                { label: "Dashboard", href: "/dashboard", icon: "dashboard", roles: ["audit_coordinator", "auditor", "prakalpa_manager", "admin"] },
                 { label: "Audit Plan", href: "/audit-plan", icon: "event_note", roles: ["admin", "audit_coordinator"] },
-                { label: "Audit Calendar", href: "/audit-calendar", icon: "calendar_month", roles: ["lead_auditor", "audit_coordinator", "auditor", "admin"] },
-                { label: "Scheduled Audits", href: "/scheduled-audits", icon: "pending_actions", roles: ["lead_auditor", "audit_coordinator", "auditor", "admin"] },
+                { label: "Audit Calendar", href: "/audit-calendar", icon: "calendar_month", roles: ["audit_coordinator", "auditor", "admin"] },
+                { label: "Scheduled Audits", href: "/scheduled-audits", icon: "pending_actions", roles: ["audit_coordinator", "auditor", "admin"] },
                 { label: "My Findings", href: "/my-findings", icon: "assignment", roles: ["auditor"] },
-                { label: "Review Findings", href: "/lead-findings", icon: "assignment", roles: ["lead_auditor"] },
-                { label: "Generate IQR", href: "/coordinator-findings", icon: "post_add", roles: ["audit_coordinator"] },
-                { label: "All Reports", href: "/all-reports", icon: "fact_check", roles: ["lead_auditor", "audit_coordinator", "prakalpa_manager", "admin"] },
-                { label: "Open Reports", href: "/open-reports", icon: "inbox", roles: ["lead_auditor", "audit_coordinator", "prakalpa_manager", "auditor", "admin"] },
-                { label: "Checklist", href: "/checklist", icon: "checklist", roles: ["lead_auditor", "audit_coordinator", "auditor", "admin"] },
-                { label: "IQA Summary", href: "/iqa-summary", icon: "summarize", roles: ["lead_auditor", "audit_coordinator", "admin"] },
-                { label: "Prakalpa Management", href: "/prakalpa-management", icon: "account_tree", roles: ["super_admin", "admin"] },
-                { label: "User Management", href: "/user-management", icon: "manage_accounts", roles: ["super_admin", "admin"] },
-                { label: "Role Access", href: "/role-access", icon: "admin_panel_settings", roles: ["lead_auditor", "admin"] },
+                { label: "Review Findings", href: "/lead-findings", icon: "assignment", roles: ["auditor"] },
+                { label: "All Reports", href: "/all-reports", icon: "fact_check", roles: ["audit_coordinator", "prakalpa_manager", "admin"] },
+                { label: "Open Reports", href: "/open-reports", icon: "inbox", roles: ["audit_coordinator", "prakalpa_manager", "auditor", "admin"] },
+                { label: "Checklist", href: "/checklist", icon: "checklist", roles: ["audit_coordinator", "auditor", "admin"] },
+                { label: "IQA Summary", href: "/iqa-summary", icon: "summarize", roles: ["audit_coordinator", "admin"] },
+                { label: "Prakalpa Management", href: "/prakalpa-management", icon: "account_tree", roles: ["super_admin"] },
+                { label: "User Management", href: "/user-management", icon: "manage_accounts", roles: ["super_admin"] },
+                { label: "Roles & Permissions", href: "/role-access", icon: "admin_panel_settings", roles: ["super_admin"] },
+                { label: "Lead Auditor Assignments", href: "/lead-auditor-assignments", icon: "assignment_ind", roles: ["admin"] },
               ]
-                .filter((item) => item.roles.includes(currentUser?.role || ""))
+                .filter((item) => isRoleAllowed(currentUser?.role || "", item.roles))
                 .map((item) => {
                   const active =
                     pathname === item.href ||

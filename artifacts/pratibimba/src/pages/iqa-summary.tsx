@@ -1,3 +1,6 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
+import { FilterText } from "../components/filters/filter-text";
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { PRAKALPAS, AUDIT_COORDINATORS } from "../context/app-context";
 import { getReports } from "../services/reportService";
@@ -171,6 +174,9 @@ export default function IQASummaryPage() {
   };
 
   // STEP 2 & 3: Filter logic updated to evaluate 'report' fields
+  const filterPrakalpaOptions = useMemo(() => [...new Set(summaryRows.map(({ report }) => report.prakalpa).filter(Boolean))], [summaryRows]);
+  const filterCoordinatorOptions = useMemo(() => [...new Set(summaryRows.map(({ report }) => report.auditCoordinator).filter(Boolean))], [summaryRows]);
+
   const filtered = useMemo(() => {
     return summaryRows.filter(({ report, reports: r }) => {
       const { label: statusLabel } = getAuditStatus(r);
@@ -255,88 +261,24 @@ export default function IQASummaryPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-outline-variant/20 shadow-soft space-y-3">
-        <div className="flex flex-wrap gap-3 items-center">
-          <div className="relative w-full sm:flex-1 sm:min-w-[180px]">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">
-              search
-            </span>
-            <input
-              type="text"
-              placeholder="Search Audit ID, Prakalpa..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest"
-            />
-          </div>
-          <select
-            value={filterPrakalpa}
-            onChange={(e) => setFilterPrakalpa(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Prakalpas</option>
-            {PRAKALPAS.map((d) => (
-              <option key={d}>{d}</option>
-            ))}
-          </select>
-          <select
-            value={filterLocation}
-            onChange={(e) => setFilterLocation(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Locations</option>
-            {allLocations.map((l) => (
-              <option key={l}>{l}</option>
-            ))}
-          </select>
-          <select
-            value={filterCoordinator}
-            onChange={(e) => setFilterCoordinator(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Coordinators</option>
-            {AUDIT_COORDINATORS.map((c) => (
-              <option key={c}>{c}</option>
-            ))}
-          </select>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Status</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Completed">Completed</option>
-          </select>
-        </div>
-        <div className="flex flex-wrap gap-3 items-center">
-          <input
-            type="text"
-            placeholder="Prakalpa Pramukh"
-            value={filterPramukh}
-            onChange={(e) => setFilterPramukh(e.target.value)}
-            className="w-full sm:w-44 border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          />
-          <select
-            value={filterAuditArea}
-            onChange={(e) => setFilterAuditArea(e.target.value)}
-            className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Audit Areas</option>
-            {allAuditAreas.map((a) => (
-              <option key={a}>{a}</option>
-            ))}
-          </select>
-          {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="font-label-md text-on-surface-variant/60 hover:text-primary transition-colors"
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-      </div>
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search Audit ID, Prakalpa..." }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : []),
+            ...(filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : []),
+            ...(filterLocation !== "All" ? [{ key: "filterLocation", label: "Location", value: filterLocation, onRemove: () => setFilterLocation("All") }] : []),
+            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : []),
+            ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : []),
+            ...(filterPramukh !== "" ? [{ key: "filterPramukh", label: "Pramukh", value: filterPramukh, onRemove: () => setFilterPramukh("") }] : []),
+            ...(filterAuditArea !== "All" ? [{ key: "filterAuditArea", label: "Audit area", value: filterAuditArea, onRemove: () => setFilterAuditArea("All") }] : [])
+          ]}
+          onClearAll={clearFilters} resultCount={filtered.length} resultLabel="IQAs shown">
+          <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={filterPrakalpaOptions.map(value => ({ value, label: value }))} searchable allLabel="All Prakalpas" />
+          <FilterSelect label="Location" value={filterLocation} onChange={setFilterLocation} options={allLocations.map(value => ({ value, label: value }))} searchable allLabel="All Locations" />
+          <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={filterCoordinatorOptions.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
+          <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus} options={[{ value: "In Progress", label: "In Progress" }, { value: "Completed", label: "Completed" }]} allLabel="All Statuses" />
+          <FilterText label="Pramukh" value={filterPramukh} onChange={setFilterPramukh} placeholder="Partial Pramukh name" />
+          <FilterSelect label="Audit area" value={filterAuditArea} onChange={setFilterAuditArea} options={allAuditAreas.map(value => ({ value, label: value }))} searchable allLabel="All Audit Areas" />
+        </FilterToolbar>
 
       {/* Summary Table */}
       <div className="bg-white rounded-xl shadow-soft border border-outline-variant/10 overflow-hidden">

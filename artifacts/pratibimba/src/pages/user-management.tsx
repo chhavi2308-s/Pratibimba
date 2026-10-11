@@ -1,3 +1,5 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
 import { useState } from "react";
 import { useApp, type AppUser, type Role, PRAKALPAS } from "../context/app-context";
 import { useEffect } from "react";
@@ -10,15 +12,15 @@ import {
 } from "../services/userService";
 
 const ROLE_OPTIONS: { value: Role; label: string; color: string }[] = [
+  { value: "super_admin",       label: "Superadmin",       color: "bg-error/10 text-error border-error/20" },
   { value: "admin",             label: "Admin",             color: "bg-error/10 text-error border-error/20" },
-  { value: "lead_auditor",      label: "Lead Auditor",      color: "bg-primary/10 text-primary border-primary/20" },
   { value: "audit_coordinator", label: "Audit Coordinator", color: "bg-tertiary/10 text-tertiary border-tertiary/20" },
   { value: "auditor",           label: "Auditor",           color: "bg-secondary/10 text-secondary border-secondary/20" },
   { value: "prakalpa_manager",  label: "Prakalpa Manager",  color: "bg-surface-container text-on-surface-variant border-outline-variant" },
 ];
 
 function roleMeta(role: Role) {
-  return ROLE_OPTIONS.find((r) => r.value === role) ?? ROLE_OPTIONS[3];
+  return ROLE_OPTIONS.find((r) => r.value === role) ?? ROLE_OPTIONS.find((r) => r.value === "auditor")!;
 }
 
 type UserFormData = {
@@ -45,11 +47,12 @@ interface UserFormProps {
   initial: UserFormData;
   onSave: (data: UserFormData) => void;
   currentUserRole: Role;
+  error?: string;
   onCancel: () => void;
   isEdit?: boolean;
 }
 
-function UserForm({ initial, onSave, currentUserRole, onCancel, isEdit }: UserFormProps) {
+function UserForm({ initial, onSave, currentUserRole, error, onCancel, isEdit }: UserFormProps) {
   const [form, setForm] = useState(initial);
   const set = (k: keyof typeof form, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -59,8 +62,7 @@ function UserForm({ initial, onSave, currentUserRole, onCancel, isEdit }: UserFo
   form.email.includes("@") &&
   (
     isEdit ||
-    ((form as any).password &&
-      (form as any).password.length >= 8)
+    form.password.length >= 8
   );
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -69,11 +71,12 @@ function UserForm({ initial, onSave, currentUserRole, onCancel, isEdit }: UserFo
         <div className="p-6 border-b border-outline-variant/10">
           <h3 className="font-headline-sm">{isEdit ? "Edit User" : "Add New User"}</h3>
           <p className="font-body-md text-on-surface-variant mt-1">
-            {isEdit ? "Update user details and role assignment." : "Add a user to the Pratibimba platform."}
+            {isEdit ? "Update user details and role assignment." : "Create a user account and select its initial role."}
           </p>
         </div>
 
         <div className="p-6 space-y-4">
+          {error && <p role="alert" className="rounded-lg bg-error/5 p-3 text-sm text-error">{error}</p>}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">Full Name <span className="text-error">*</span></label>
@@ -103,8 +106,8 @@ function UserForm({ initial, onSave, currentUserRole, onCancel, isEdit }: UserFo
 
               <input
                 type="password"
-                value={(form as any).password}
-                onChange={(e) => set("password" as any, e.target.value)}
+                value={form.password}
+                onChange={(e) => set("password", e.target.value)}
                 placeholder="Minimum 8 characters"
                 className="w-full border border-outline-variant rounded-lg px-3 py-2.5 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
               />
@@ -113,33 +116,11 @@ function UserForm({ initial, onSave, currentUserRole, onCancel, isEdit }: UserFo
           <div>
             <label className="font-label-md text-on-surface-variant block mb-2">Role <span className="text-error">*</span></label>
             <div className="grid grid-cols-1 gap-2">
-              {ROLE_OPTIONS
-              .filter(
-                (r) =>
-                  r.value !== "admin" ||
-                  currentUserRole === "super_admin"
-              )
-              .map((r) => (
-                <button
-                  key={r.value}
-                  type="button"
-                  onClick={() => set("role", r.value)}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-lg border-2 text-left transition-all ${form.role === r.value ? r.color + " border-current" : "border-outline-variant hover:border-primary/30"}`}
-                >
-                  <span className={`material-symbols-outlined text-[18px] ${form.role === r.value ? "" : "text-on-surface-variant/50"}`}>
-                    {r.value === "admin" ? "shield_person" : r.value === "lead_auditor" ? "verified_user" : r.value === "audit_coordinator" ? "group_work" : r.value === "auditor" ? "search" : "store"}
-                  </span>
-                  <div>
-                    <p className="font-label-md font-bold text-[13px]">{r.label}</p>
-                    <p className="text-[11px] text-on-surface-variant/70 leading-tight">
-                      {r.value === "admin" && "Manages users, roles, and platform access."}
-                      {r.value === "lead_auditor" && "Creates audit plans, assigns teams."}
-                      {r.value === "audit_coordinator" && "Leads field audit teams with auditors."}
-                      {r.value === "auditor" && "Part of the field audit team."}
-                      {r.value === "prakalpa_manager" && "Oversees a Prakalpa."}
-                    </p>
-                  </div>
-                  {form.role === r.value && <span className="material-symbols-outlined text-[18px] ml-auto">check_circle</span>}
+              {ROLE_OPTIONS.filter((role) => role.value !== "super_admin" || (isEdit && currentUserRole === "super_admin")).map((role) => (
+                <button key={role.value} type="button" onClick={() => set("role", role.value)}
+                  className={`flex items-center gap-3 rounded-lg border-2 px-4 py-3 text-left ${form.role === role.value ? role.color + " border-current" : "border-outline-variant"}`}>
+                  <span className="font-label-md text-[13px] font-bold">{role.label}</span>
+                  {form.role === role.value && <span className="material-symbols-outlined ml-auto text-[18px]">check_circle</span>}
                 </button>
               ))}
             </div>
@@ -195,15 +176,18 @@ function UserForm({ initial, onSave, currentUserRole, onCancel, isEdit }: UserFo
 }
 
 export default function UserManagement() {
-  const { currentUser } = useApp();
+  const { currentUser, refreshLiveData } = useApp();
 
   const [users, setUsers] = useState<AppUser[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editUser, setEditUser] = useState<AppUser | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<AppUser | null>(null);
   const [filterRole, setFilterRole] = useState<Role | "all">("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
   const [search, setSearch] = useState("");
+  const [formError, setFormError] = useState("");
   useEffect(() => {
+    if (currentUser.role !== "super_admin") return;
     async function loadUsers() {
       try {
         const response = await getUsers();
@@ -219,34 +203,28 @@ export default function UserManagement() {
     }
 
     loadUsers();
-  }, []);
-  if (currentUser.role !== "super_admin" && currentUser.role !== "admin") {
+  }, [currentUser.role]);
+  if (currentUser.role !== "super_admin") {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-on-surface-variant">
         <span className="material-symbols-outlined text-5xl mb-3">lock</span>
         <p className="font-headline-sm">Access Restricted</p>
-        <p className="font-body-md mt-1">Only admins can manage users.</p>
+        <p className="font-body-md mt-1">Only Superadmins can manage users.</p>
       </div>
     );
   }
 
-  const canManageUser = (targetRole: Role) => {
-    if (targetRole === "super_admin") {
-      return false;
-    }
-
-    if (currentUser.role === "super_admin") {
-      return true;
-    }
-
-    return targetRole !== "admin";
-  };
+  const canManageUser = (targetRole: Role) =>
+    targetRole !== "super_admin" || currentUser.role === "super_admin";
 
   const filtered = users.filter((u) => {
     const matchRole = filterRole === "all" || u.role === filterRole;
     const q = search.toLowerCase();
     const matchSearch = !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
-    return matchRole && matchSearch;
+    const matchStatus =
+      filterStatus === "all" ||
+      (filterStatus === "active" ? u.active : !u.active);
+    return matchRole && matchSearch && matchStatus;
   });
 
   const roleCounts = ROLE_OPTIONS.reduce<Record<string, number>>((acc, r) => {
@@ -262,13 +240,13 @@ export default function UserManagement() {
           <h1 className="font-headline-md font-bold text-on-surface">User Management</h1>
           <p className="font-body-md text-on-surface-variant mt-1">{users.length} users · {users.filter((u) => u.active).length} active</p>
         </div>
-        <button
+        {currentUser.role === "super_admin" && <button
           onClick={() => { setEditUser(null); setShowForm(true); }}
           className="flex items-center gap-2 bg-primary text-on-primary px-5 py-2.5 rounded-xl font-label-md font-bold hover:brightness-110 transition-all shadow-md"
         >
           <span className="material-symbols-outlined text-[18px]">person_add</span>
           Add User
-        </button>
+        </button>}
       </div>
 
       {/* Role summary cards */}
@@ -286,26 +264,18 @@ export default function UserManagement() {
       </div>
 
       {/* Search + filter */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">search</span>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name or email…"
-            className="w-full pl-9 pr-4 py-2.5 border border-outline-variant rounded-xl font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
-          />
-        </div>
-        <select
-          value={filterRole}
-          onChange={(e) => setFilterRole(e.target.value as Role | "all")}
-          className="w-full sm:w-auto border border-outline-variant rounded-xl px-4 py-2.5 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
-        >
-          <option value="all">All Roles</option>
-          {ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-        </select>
-      </div>
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search by name or email…" }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : []),
+            ...(filterRole !== "all" ? [{ key: "filterRole", label: "Role", value: ROLE_OPTIONS.find(role => role.value === filterRole)?.label ?? filterRole, onRemove: () => setFilterRole("all") }] : []),
+            ...(filterStatus !== "all" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("all") }] : [])
+          ]}
+          onClearAll={() => { setSearch(""); setFilterRole("all"); setFilterStatus("all"); }} resultCount={filtered.length} resultLabel="users shown">
+          <FilterSelect label="Role" value={filterRole} onChange={value => setFilterRole(value as Role | "all")} options={ROLE_OPTIONS.map(role => ({ value: role.value, label: role.label }))} allValue="all" allLabel="All Roles" />
+          <FilterSelect label="Status" value={filterStatus} onChange={value => setFilterStatus(value as typeof filterStatus)} options={[{ value: "active", label: "Active" }, { value: "inactive", label: "Inactive" }]} allValue="all" allLabel="All Statuses" />
+        </FilterToolbar>
 
+      {formError && <p role="alert" className="text-sm text-error">{formError}</p>}
       {/* Users table */}
       <div className="bg-white rounded-2xl border border-outline-variant/20 overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
@@ -364,6 +334,7 @@ export default function UserManagement() {
                       <button
                         onClick={() => {
                           if (!canManageUser(u.role)) return;
+                          setFormError("");
                           setEditUser(u);
                           setShowForm(true);
                         }}
@@ -376,6 +347,7 @@ export default function UserManagement() {
                       <button
                         onClick={() => {
                           if (!canManageUser(u.role)) return;
+                          setFormError("");
                           setConfirmDelete(u);
                         }}
                         disabled={!canManageUser(u.role)}
@@ -398,6 +370,7 @@ export default function UserManagement() {
       {showForm && (
         <UserForm
           currentUserRole={currentUser.role}
+          error={formError}
           initial={
             editUser
               ? {
@@ -414,23 +387,26 @@ export default function UserManagement() {
           isEdit={!!editUser}
           onCancel={() => { setShowForm(false); setEditUser(null); }}
           onSave={async (data) => {
+            setFormError("");
             try {
               if (editUser) {
-                await updateUser(editUser.id, data);
+                const { password: _password, ...profile } = data;
+                await updateUser(editUser.id, profile);
               } else {
                 await createUser(data);
               }
 
-              const response = await getUsers();
+              await refreshLiveData();
+              const response = await getUsers().catch(() => null);
 
-              if (response.success) {
+              if (response?.success) {
                 setUsers(response.data);
               }
 
               setShowForm(false);
               setEditUser(null);
             } catch (err) {
-              console.error(err);
+              setFormError(err instanceof Error ? err.message : "Unable to save the user.");
             }
           }}
         />
@@ -453,22 +429,24 @@ export default function UserManagement() {
             <p className="font-body-md text-on-surface-variant mb-5">
               This will deactivate <strong>{confirmDelete.name}</strong>. The user will no longer be able to access the platform.
             </p>
+            {formError && <p role="alert" className="mb-4 text-sm text-error">{formError}</p>}
             <div className="flex flex-col sm:flex-row gap-3">
               <button onClick={() => setConfirmDelete(null)} className="flex-1 py-2.5 border border-outline-variant rounded-lg font-label-md hover:bg-surface-container-low">Cancel</button>
               <button
                 onClick={async () => {
                   try {
                     await deleteUser(confirmDelete.id);
+                    await refreshLiveData();
 
-                    const response = await getUsers();
+                    const response = await getUsers().catch(() => null);
 
-                    if (response.success) {
+                    if (response?.success) {
                       setUsers(response.data);
                     }
 
                     setConfirmDelete(null);
                   } catch (err) {
-                    console.error(err);
+                    setFormError(err instanceof Error ? err.message : "Unable to deactivate the user.");
                   }
                 }}
                 className="flex-1 py-2.5 bg-error text-white rounded-lg font-label-md font-bold hover:brightness-110"

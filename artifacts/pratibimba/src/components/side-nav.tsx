@@ -3,6 +3,8 @@ import { Link, useLocation } from "wouter";
 import { clsx } from "clsx";
 import { useApp } from "../context/app-context";
 import pratibimbaLogo from "../assets/pratibimba-logo.jpeg";
+import { AccountCenter } from "./account-center";
+import { isRoleAllowed } from "./role-route-guard";
 
 import { clearAuthenticatedSession } from "../services/authService";
 
@@ -19,7 +21,6 @@ const navItems: NavItem[] = [
     href: "/dashboard",
     icon: "dashboard",
     roles: [
-      "lead_auditor",
       "audit_coordinator",
       "auditor",
       "prakalpa_manager",
@@ -38,7 +39,6 @@ const navItems: NavItem[] = [
     href: "/audit-calendar",
     icon: "calendar_month",
     roles: [
-      "lead_auditor",
       "audit_coordinator",
       "auditor",
       "admin",
@@ -49,7 +49,6 @@ const navItems: NavItem[] = [
     href: "/scheduled-audits",
     icon: "pending_actions",
     roles: [
-      "lead_auditor",
       "audit_coordinator",
       "auditor",
       "admin",
@@ -65,20 +64,13 @@ const navItems: NavItem[] = [
     label: "Review Findings",
     href: "/lead-findings",
     icon: "assignment",
-    roles: ["lead_auditor"],
-  },
-  {
-    label: "Generate IQR",
-    href: "/coordinator-findings",
-    icon: "post_add",
-    roles: ["audit_coordinator"],
+    roles: ["auditor"],
   },
   {
     label: "All Reports",
     href: "/all-reports",
     icon: "fact_check",
     roles: [
-      "lead_auditor",
       "audit_coordinator",
       "prakalpa_manager",
       "admin",
@@ -89,7 +81,6 @@ const navItems: NavItem[] = [
     href: "/open-reports",
     icon: "inbox",
     roles: [
-      "lead_auditor",
       "audit_coordinator",
       "prakalpa_manager",
       "auditor",
@@ -101,7 +92,6 @@ const navItems: NavItem[] = [
     href: "/checklist",
     icon: "checklist",
     roles: [
-      "lead_auditor",
       "audit_coordinator",
       "auditor",
       "admin",
@@ -112,7 +102,6 @@ const navItems: NavItem[] = [
     href: "/iqa-summary",
     icon: "summarize",
     roles: [
-      "lead_auditor",
       "audit_coordinator",
       "admin",
     ],
@@ -121,26 +110,31 @@ const navItems: NavItem[] = [
     label: "Prakalpa Management",
     href: "/prakalpa-management",
     icon: "account_tree",
-    roles: ["super_admin", "admin"],
+    roles: ["super_admin"],
   },
   {
     label: "User Management",
     href: "/user-management",
     icon: "manage_accounts",
-    roles: ["super_admin", "admin"],
+    roles: ["super_admin"],
   },
   {
-    label: "Role Access",
+    label: "Roles & Permissions",
     href: "/role-access",
     icon: "admin_panel_settings",
-    roles: ["lead_auditor", "admin"],
+    roles: ["super_admin"],
+  },
+  {
+    label: "Lead Auditor Assignments",
+    href: "/lead-auditor-assignments",
+    icon: "assignment_ind",
+    roles: ["admin"],
   },
 ];
 
 export const ROLE_LABELS: Record<string, string> = {
   super_admin: "Super Admin",
   admin: "Admin",
-  lead_auditor: "Lead Auditor",
   audit_coordinator: "Audit Coordinator",
   auditor: "Auditor",
   prakalpa_manager: "Manager",
@@ -169,7 +163,7 @@ export function SideNav() {
   };
 
   const visible = navItems.filter((item) =>
-    item.roles.includes(currentUser?.role || "")
+    isRoleAllowed(currentUser?.role || "", item.roles)
   );
 
   const roleLabel =
@@ -255,19 +249,8 @@ export function SideNav() {
         </nav>
 
         <div className="px-3 mt-auto pt-4 border-t border-white/10">
+          <AccountCenter onLogout={() => setShowLogoutConfirm(true)} />
 
-          <button
-            onClick={() =>
-              setShowLogoutConfirm(true)
-            }
-            className="w-full py-2.5 bg-red-600/80 text-white font-bold rounded-lg flex items-center justify-center gap-2 hover:bg-red-600 transition-all shadow-md text-[13px]"
-          >
-            <span className="material-symbols-outlined text-[17px]">
-              logout
-            </span>
-
-            Logout
-          </button>
 
         </div>
       </aside>

@@ -6,6 +6,13 @@ type RoleRouteGuardProps = {
   allowedRoles: readonly string[];
 };
 
+export function isRoleAllowed(role: string, allowedRoles: readonly string[]) {
+  return (
+    allowedRoles.includes(role) ||
+    (role === "super_admin" && allowedRoles.includes("admin"))
+  );
+}
+
 /*
  * Frontend route-level authorization guard.
  *
@@ -22,8 +29,7 @@ export function RoleRouteGuard({
   const role =
     currentUser?.role || "";
 
-  const allowed =
-    allowedRoles.includes(role);
+  const allowed = isRoleAllowed(role, allowedRoles);
 
   if (!allowed) {
     return (

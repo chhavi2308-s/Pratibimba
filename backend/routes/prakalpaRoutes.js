@@ -27,7 +27,7 @@ router.get(
 router.post(
   "/",
   authenticate,
-  authorize("super_admin", "admin"),
+  authorize("super_admin"),
   createPrakalpaValidator,
   createPrakalpa
 );
@@ -35,7 +35,7 @@ router.post(
 router.put(
   "/:id",
   authenticate,
-  authorize("super_admin", "admin"),
+  authorize("super_admin"),
   updatePrakalpaValidator,
   updatePrakalpa
 );
@@ -43,7 +43,7 @@ router.put(
 router.delete(
   "/:id",
   authenticate,
-  authorize("super_admin", "admin"),
+  authorize("super_admin"),
   deletePrakalpa
 );
 

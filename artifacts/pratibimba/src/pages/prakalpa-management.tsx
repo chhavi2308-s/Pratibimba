@@ -1,4 +1,6 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
 import { useEffect, useMemo, useState } from "react";
+import { useApp } from "../context/app-context";
 import {
   createPrakalpa,
   deletePrakalpa,
@@ -19,6 +21,7 @@ function getId(item: { _id?: string; id?: string }) {
 }
 
 export default function PrakalpaManagementPage() {
+  const { currentUser } = useApp();
   const [prakalpas, setPrakalpas] = useState<Prakalpa[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,6 +30,7 @@ export default function PrakalpaManagementPage() {
   const [showPrakalpaModal, setShowPrakalpaModal] = useState(false);
   const [editingPrakalpa, setEditingPrakalpa] = useState<Prakalpa | null>(null);
   const [prakalpaName, setPrakalpaName] = useState("");
+  const [initialLocation, setInitialLocation] = useState("");
   const [prakalpaPramukh, setPrakalpaPramukh] = useState("");
   const [prakalpaPramukhEmail, setPrakalpaPramukhEmail] = useState("");
   const [seniorEmail, setSeniorEmail] = useState("");
@@ -65,8 +69,8 @@ export default function PrakalpaManagementPage() {
   }
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (currentUser.role === "super_admin") void loadData();
+  }, [currentUser.role]);
 
   const filteredPrakalpas = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -94,6 +98,7 @@ export default function PrakalpaManagementPage() {
   function openCreatePrakalpa() {
     setEditingPrakalpa(null);
     setPrakalpaName("");
+    setInitialLocation("");
     setPrakalpaPramukh("");
     setPrakalpaPramukhEmail("");
     setSeniorEmail("");
@@ -140,6 +145,11 @@ export default function PrakalpaManagementPage() {
       return;
     }
 
+    if (!editingPrakalpa && !initialLocation.trim()) {
+      setError("Location is required to create a Prakalpa.");
+      return;
+    }
+
     setSaving(true);
     setError("");
 
@@ -156,6 +166,7 @@ export default function PrakalpaManagementPage() {
       } else {
         await createPrakalpa({
           name,
+          initialLocation: initialLocation.trim(),
           prakalpaPramukh: prakalpaPramukh.trim(),
           prakalpaPramukhEmail: prakalpaPramukhEmail.trim(),
           seniorEmail: seniorEmail.trim(),
@@ -287,6 +298,10 @@ export default function PrakalpaManagementPage() {
     }
   }
 
+  if (currentUser.role !== "super_admin") {
+    return <div className="p-6 text-center">Only Superadmins can manage Prakalpas.</div>;
+  }
+
   if (loading) {
     return (
       <div className="p-4 sm:p-6 lg:p-8">
@@ -337,20 +352,11 @@ export default function PrakalpaManagementPage() {
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow-soft border border-outline-variant/10 p-4">
-        <div className="relative max-w-xl">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50">
-            search
-          </span>
-
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search Prakalpa, audit area, location or sublocation..."
-            className="w-full pl-10 pr-4 py-3 rounded-xl border border-outline-variant/30 bg-surface-container-lowest outline-none focus:border-primary"
-          />
-        </div>
-      </div>
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search Prakalpa, audit area, location or sublocation..." }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : [])
+          ]}
+          onClearAll={() => setSearch("")} resultCount={filteredPrakalpas.length} resultLabel="Prakalpas shown" />
 
       <div className="space-y-5">
         {filteredPrakalpas.map((p) => {
@@ -595,6 +601,29 @@ export default function PrakalpaManagementPage() {
                   className="w-full border border-outline-variant/30 rounded-xl px-4 py-3 outline-none focus:border-primary"
                 />
               </div>
+
+              {!editingPrakalpa && (
+                <div>
+                  <label
+                    htmlFor="prakalpa-initial-location"
+                    className="block font-label-md font-bold mb-2"
+                  >
+                    Initial Location <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    id="prakalpa-initial-location"
+                    value={initialLocation}
+                    onChange={(e) => setInitialLocation(e.target.value)}
+                    placeholder="Enter the first Location"
+                    required
+                    aria-required="true"
+                    className="w-full border border-outline-variant/30 rounded-xl px-4 py-3 outline-none focus:border-primary"
+                  />
+                  <p className="text-xs text-on-surface-variant mt-1.5">
+                    A Location is required before this Prakalpa can be created.
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>

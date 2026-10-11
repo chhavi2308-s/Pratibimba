@@ -1,3 +1,5 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { useApp, type AuditPlan } from "../context/app-context";
@@ -14,7 +16,6 @@ import {
 } from "../services/locationService";
 
 import {
-  unscheduleAuditPlan,
   getAuditPlans,
   createAuditPlan,
   updateAuditPlan,
@@ -44,6 +45,7 @@ interface ScheduleModalProps {
   }) => void;
   auditors: string[];
   leadAuditors: string[];
+  auditorDirectoryError: string | null;
 }
 function ScheduleModal({
   plan,
@@ -51,6 +53,7 @@ function ScheduleModal({
   onSchedule,
   auditors,
   leadAuditors,
+  auditorDirectoryError,
 }: ScheduleModalProps) {
   const [startDate, setStartDate] = useState(
     plan.auditPlannedDate
@@ -65,8 +68,12 @@ function ScheduleModal({
   const [selectedAuditors, setSelectedAuditors] = useState<string[]>(plan.auditors || []);
   const [leadAuditor, setLeadAuditor] = useState("");
 
-  const toggleAuditor = (a: string) =>
-    setSelectedAuditors((prev) => prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]);
+  const toggleAuditor = (a: string) => {
+    setSelectedAuditors((prev) =>
+      prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]
+    );
+    if (leadAuditor === a) setLeadAuditor("");
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -116,6 +123,11 @@ function ScheduleModal({
 
           <div>
             <label className="font-label-md text-on-surface-variant block mb-2">Auditors</label>
+            {auditorDirectoryError && (
+              <p role="alert" className="text-sm text-red-600 mb-2">
+                {auditorDirectoryError}
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               {auditors.map((a, idx) => (
                 <button key={`${a}-${idx}`} type="button" onClick={() => toggleAuditor(a)}
@@ -129,7 +141,7 @@ function ScheduleModal({
             <label className="font-label-md text-on-surface-variant block mb-1">Lead Auditor</label>
             <select value={leadAuditor} onChange={(e) => setLeadAuditor(e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
               <option value="">Select Lead Auditor</option>
-              {leadAuditors.map((name) => (
+              {selectedAuditors.filter((name) => leadAuditors.includes(name)).map((name) => (
                 <option
                   key={name}
                   value={name}
@@ -142,7 +154,7 @@ function ScheduleModal({
         </div>
         <div className="p-6 pt-0 flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 border border-outline-variant rounded-lg font-label-md hover:bg-surface-container-low">Cancel</button>
-          <button disabled={!startDate || !endDate || selectedAuditors.length === 0 || !leadAuditor} onClick={() =>
+          <button disabled={!!auditorDirectoryError || !startDate || !endDate || selectedAuditors.length === 0 || !leadAuditor || !selectedAuditors.every((name) => auditors.includes(name)) || !auditors.includes(leadAuditor)} onClick={() =>
             onSchedule({
               startDate,
               endDate,
@@ -180,7 +192,7 @@ function EditModal({
     "";
 
   const [selectedAreas, setSelectedAreas] = useState<string[]>(
-    plan?.auditAreas || []
+    (plan?.auditAreas || []).filter((area) => prakalpas.find((p) => p.name === firstPrakalpa)?.auditAreas?.includes(area))
   );
 
   const [form, setForm] = useState({
@@ -428,8 +440,8 @@ export default function AuditPlanPage() {
   const {
     currentUser,
     auditors,
+    auditorDirectoryError,
     coordinatorUsers,
-    leadAuditorProfiles,
     refreshLiveData
   } = useApp();
   const [auditPlans, setAuditPlans] = useState<AuditPlan[]>([]);
@@ -474,14 +486,6 @@ export default function AuditPlanPage() {
   const [scheduleTarget, setScheduleTarget] = useState<AuditPlan | null>(null);
   const [editTarget, setEditTarget] = useState<AuditPlan | null | "new">(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [unscheduleTarget, setUnscheduleTarget] =
-    useState<AuditPlan | null>(null);
-
-  const [isUnscheduling, setIsUnscheduling] =
-    useState(false);
-
-  const [unscheduleError, setUnscheduleError] =
-    useState("");
   const [search, setSearch] = useState("");
   const [filterPrakalpa, setFilterPrakalpa] = useState("All");
   const [filterLocation, setFilterLocation] = useState("All");
@@ -491,54 +495,11 @@ export default function AuditPlanPage() {
   const [showAllPlans, setShowAllPlans] =
     useState(false);
 
-  const isLead = currentUser.role === "lead_auditor";
+  const canManageAuditPlans = currentUser.role === "admin" || currentUser.role === "super_admin";
+  const canManageScheduling = currentUser.role === "admin" || currentUser.role === "super_admin" || currentUser.role === "audit_coordinator";
+  const canSeeAuditPlanActions = canManageAuditPlans || canManageScheduling;
 
   const allLocations = useMemo(() => [...new Set(auditPlans.map((p) => p.location).filter(Boolean))], [auditPlans]);
-
-  const handleUnschedule =
-    async () => {
-      if (!unscheduleTarget) {
-        return;
-      }
-
-      const id =
-        unscheduleTarget.id ||
-        unscheduleTarget._id;
-
-      if (!id) {
-        setUnscheduleError(
-          "Audit Plan ID is missing."
-        );
-        return;
-      }
-
-      try {
-        setIsUnscheduling(true);
-        setUnscheduleError("");
-
-        await unscheduleAuditPlan(
-          id
-        );
-
-        await loadAuditPlans();
-        await refreshLiveData();
-
-        setUnscheduleTarget(null);
-      } catch (err: any) {
-        console.error(
-          "Failed to unschedule audit:",
-          err
-        );
-
-        setUnscheduleError(
-          err?.response?.data?.message ||
-            err?.message ||
-            "Failed to unschedule audit."
-        );
-      } finally {
-        setIsUnscheduling(false);
-      }
-    };
 
   const filtered = useMemo(() => {
     return auditPlans
@@ -609,7 +570,7 @@ export default function AuditPlanPage() {
             <span className="material-symbols-outlined text-[18px]">download</span>
             Download
           </button>
-          {isLead && (
+          {canManageAuditPlans && (
             <button onClick={() => setEditTarget("new")} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-on-primary rounded-lg font-label-md font-bold shadow-sm hover:brightness-110">
               <span className="material-symbols-outlined text-[18px]">add</span>
               New Audit Plan
@@ -619,39 +580,20 @@ export default function AuditPlanPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-outline-variant/20 shadow-soft flex flex-wrap gap-3 items-center">
-        <div className="relative w-full sm:flex-1 sm:min-w-[200px]">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">search</span>
-          <input type="text" placeholder="Search Audit ID, Prakalpa, Location..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest" />
-        </div>
-        <select value={filterPrakalpa} onChange={(e) => setFilterPrakalpa(e.target.value)} className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Prakalpas</option>
-          {prakalpas
-            .filter((p) => p.active !== false)
-            .map((p) => (
-              <option key={p._id || p.id || p.name} value={p.name}>
-                {p.name}
-              </option>
-            ))}
-        </select>
-        <select value={filterLocation} onChange={(e) => setFilterLocation(e.target.value)} className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Locations</option>
-          {allLocations.map((l) => <option key={l}>{l}</option>)}
-        </select>
-        <select value={filterCoordinator} onChange={(e) => setFilterCoordinator(e.target.value)} className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Coordinators</option>
-          {coordinatorNames.map((c, idx) => <option key={`${c}-${idx}`}>{c}</option>)}
-        </select>
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="w-full sm:w-auto border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Status</option>
-          <option value="pending">Pending</option>
-          <option value="scheduled">Scheduled</option>
-          <option value="completed">Completed</option>
-        </select>
-        {(search || filterPrakalpa !== "All" || filterLocation !== "All" || filterCoordinator !== "All" || filterStatus !== "All") && (
-          <button onClick={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterCoordinator("All"); setFilterStatus("All"); }} className="font-label-md text-on-surface-variant/60 hover:text-primary">Clear</button>
-        )}
-      </div>
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search Audit ID, Prakalpa, Location..." }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : []),
+            ...(filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : []),
+            ...(filterLocation !== "All" ? [{ key: "filterLocation", label: "Location", value: filterLocation, onRemove: () => setFilterLocation("All") }] : []),
+            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : []),
+            ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : [])
+          ]}
+          onClearAll={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterCoordinator("All"); setFilterStatus("All"); }} resultCount={filtered.length} resultLabel="plans shown">
+          <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={prakalpas.filter(p => p.active !== false).map(p => ({ value: p.name, label: p.name }))} searchable allLabel="All Prakalpas" />
+          <FilterSelect label="Location" value={filterLocation} onChange={setFilterLocation} options={allLocations.map(value => ({ value, label: value }))} searchable allLabel="All Locations" />
+          <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={coordinatorNames.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
+          <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus} options={[{ value: "pending", label: "Pending" }, { value: "scheduled", label: "Scheduled" }, { value: "completed", label: "Completed" }]} allLabel="All Statuses" />
+        </FilterToolbar>
 
       {/* Audit plan visibility */}
       <div className="flex items-center justify-start -mt-2">
@@ -676,7 +618,7 @@ export default function AuditPlanPage() {
         <div className="bg-white rounded-xl border border-outline-variant/10 shadow-soft p-16 flex flex-col items-center justify-center gap-4">
           <span className="material-symbols-outlined text-[48px] text-on-surface-variant/20">event_note</span>
           <p className="font-headline-sm text-on-surface-variant/40">No audit plans found</p>
-          {isLead && <button onClick={() => setEditTarget("new")} className="px-6 py-2.5 bg-primary text-on-primary rounded-lg font-label-md font-bold">Create First Plan</button>}
+          {canManageAuditPlans && <button onClick={() => setEditTarget("new")} className="px-6 py-2.5 bg-primary text-on-primary rounded-lg font-label-md font-bold">Create First Plan</button>}
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow-soft border border-outline-variant/10 overflow-hidden">
@@ -684,7 +626,7 @@ export default function AuditPlanPage() {
             <table className="w-full min-w-[1180px] text-left">
               <thead className="bg-surface-container-lowest border-b border-outline-variant/20">
                 <tr>
-                  {["Audit ID", "Prakalpa", "Location", "Sublocation", "Audit Areas", "Planned Date", "Coordinator", "Pramukh", "Auditors", "Status", ...(isLead ? ["Actions"] : [])].map((h) => (
+                  {["Audit ID", "Prakalpa", "Location", "Sublocation", "Audit Areas", "Planned Date", "Coordinator", "Pramukh", "Auditors", "Status", ...(canSeeAuditPlanActions ? ["Actions"] : [])].map((h) => (
                     <th key={h} className="px-4 py-3 font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -716,12 +658,13 @@ export default function AuditPlanPage() {
                     <td className="px-4 py-3">
                       <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase ${plan.status === "pending" ? "bg-primary/10 text-primary" : "bg-secondary/10 text-secondary"}`}>{plan.status}</span>
                     </td>
-                    {isLead && (
+                    {canSeeAuditPlanActions && (
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
 
                           {plan.status === "pending" && (
                             <>
+                                {canManageScheduling && (
                               <button
                                 onClick={() =>
                                   setScheduleTarget(
@@ -735,7 +678,9 @@ export default function AuditPlanPage() {
                                   event
                                 </span>
                               </button>
+                                )}
 
+                                {canManageAuditPlans && (<>
                               <button
                                 onClick={() =>
                                   setEditTarget(
@@ -765,24 +710,8 @@ export default function AuditPlanPage() {
                                   delete
                                 </span>
                               </button>
+                                </>)}
                             </>
-                          )}
-
-                          {plan.status === "scheduled" && (
-                            <button
-                              onClick={() => {
-                                setUnscheduleError("");
-                                setUnscheduleTarget(
-                                  plan
-                                );
-                              }}
-                              title="Unschedule"
-                              className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-700"
-                            >
-                              <span className="material-symbols-outlined text-[18px]">
-                                event_busy
-                              </span>
-                            </button>
                           )}
 
                           {plan.status === "completed" && (
@@ -820,11 +749,8 @@ export default function AuditPlanPage() {
             }
           }}
           auditors={auditors}
-          leadAuditors={
-            leadAuditorProfiles.map(
-              (profile) => profile.name
-            )
-          }
+          leadAuditors={auditors}
+          auditorDirectoryError={auditorDirectoryError}
         />
       )}
       {editTarget && (
@@ -852,145 +778,6 @@ export default function AuditPlanPage() {
           masterLocations={masterLocations}
         />
       )}
-      {unscheduleTarget && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            onClick={() => {
-              if (!isUnscheduling) {
-                setUnscheduleTarget(null);
-                setUnscheduleError("");
-              }
-            }}
-          />
-
-          <div className="relative z-10 w-full max-w-md bg-white rounded-2xl shadow-floating border border-outline-variant/20 overflow-hidden">
-
-            <div className="p-6 border-b border-outline-variant/10">
-
-              <div className="flex items-start gap-3">
-
-                <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                  <span className="material-symbols-outlined">
-                    event_busy
-                  </span>
-                </div>
-
-                <div className="flex-1">
-                  <h3 className="font-headline-sm text-on-surface">
-                    Unschedule Audit?
-                  </h3>
-
-                  <p className="font-body-md text-on-surface-variant mt-1">
-                    {unscheduleTarget.iqaNumber}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  disabled={isUnscheduling}
-                  onClick={() => {
-                    setUnscheduleTarget(null);
-                    setUnscheduleError("");
-                  }}
-                  className="p-1.5 rounded-lg hover:bg-surface-container disabled:opacity-50"
-                >
-                  <span className="material-symbols-outlined text-[18px]">
-                    close
-                  </span>
-                </button>
-
-              </div>
-
-            </div>
-
-            <div className="p-6 space-y-4">
-
-              <div className="rounded-xl bg-amber-50 border border-amber-200 p-4">
-
-                <p className="text-sm font-semibold text-amber-900">
-                  This will move the audit back to Planned status.
-                </p>
-
-                <p className="text-xs text-amber-800 mt-1 leading-relaxed">
-                  The linked Scheduled Audit and all scheduling-specific values will be removed.
-                </p>
-
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-
-                <div>
-                  <p className="text-[10px] uppercase tracking-wide text-on-surface-variant font-bold">
-                    Prakalpa
-                  </p>
-                  <p className="mt-1 font-medium">
-                    {unscheduleTarget.prakalpa}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-[10px] uppercase tracking-wide text-on-surface-variant font-bold">
-                    Location
-                  </p>
-                  <p className="mt-1 font-medium">
-                    {unscheduleTarget.location}
-                  </p>
-                </div>
-
-              </div>
-
-              {unscheduleError && (
-                <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-                  {unscheduleError}
-                </div>
-              )}
-
-            </div>
-
-            <div className="p-6 border-t border-outline-variant/10 flex justify-end gap-3">
-
-              <button
-                type="button"
-                disabled={isUnscheduling}
-                onClick={() => {
-                  setUnscheduleTarget(null);
-                  setUnscheduleError("");
-                }}
-                className="px-4 py-2 border border-outline-variant rounded-lg font-label-md font-semibold hover:bg-surface-container disabled:opacity-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                disabled={isUnscheduling}
-                onClick={handleUnschedule}
-                className="px-4 py-2 bg-amber-600 text-white rounded-lg font-label-md font-bold hover:bg-amber-700 disabled:opacity-60 inline-flex items-center gap-2"
-              >
-                {isUnscheduling ? (
-                  <>
-                    <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    Unscheduling...
-                  </>
-                ) : (
-                  <>
-                    <span className="material-symbols-outlined text-[17px]">
-                      event_busy
-                    </span>
-                    Confirm Unschedule
-                  </>
-                )}
-              </button>
-
-            </div>
-
-          </div>
-
-        </div>
-      )}
-
       {deleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40" onClick={() => setDeleteConfirm(null)} />

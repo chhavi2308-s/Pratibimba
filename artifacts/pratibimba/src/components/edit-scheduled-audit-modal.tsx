@@ -433,9 +433,6 @@ export default function EditScheduledAuditModal({
                             {user.name}
                           </p>
 
-                          <p className="text-[11px] text-on-surface-variant truncate">
-                            {user.email}
-                          </p>
 
                         </div>
 

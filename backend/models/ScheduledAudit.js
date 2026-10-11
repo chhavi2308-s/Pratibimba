@@ -61,6 +61,19 @@ const scheduledAuditSchema =
         trim: true,
       },
 
+      workflowMode: {
+        type: String,
+        enum: ["legacy", "consolidated"],
+        default: "legacy",
+      },
+
+      // Shared transaction write-conflict counter for consolidated audits.
+      workflowRevision: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
       auditAreas: {
         type: [String],
         default: [],

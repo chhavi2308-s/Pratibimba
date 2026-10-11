@@ -22,6 +22,27 @@ async function handleResponse(res: Response) {
   return data;
 }
 
+export async function getAuditorDirectory(): Promise<{
+  success: boolean;
+  data: Array<{ _id: string; name: string }>;
+}> {
+  const res = await fetch(`${BASE_URL}/auditor-directory`, {
+    headers: authHeaders(),
+  });
+  return handleResponse(res);
+}
+
+export interface AuditPerson {
+  _id: string;
+  name: string;
+  role: "auditor" | "audit_coordinator";
+}
+
+export async function getAuditPersonDirectory(): Promise<{ success: boolean; data: AuditPerson[] }> {
+  const res = await fetch(`${BASE_URL}/audit-directory`, { headers: authHeaders() });
+  return handleResponse(res);
+}
+
 export async function getUsers() {
   const res = await fetch(BASE_URL, {
     headers: authHeaders(),
@@ -45,6 +66,16 @@ export async function updateUser(id: string, data: any) {
     method: "PUT",
     headers: authHeaders(),
     body: JSON.stringify(data),
+  });
+
+  return handleResponse(res);
+}
+
+export async function updateUserRole(id: string, role: string) {
+  const res = await fetch(`${BASE_URL}/${id}/role`, {
+    method: "PATCH",
+    headers: authHeaders(),
+    body: JSON.stringify({ role }),
   });
 
   return handleResponse(res);

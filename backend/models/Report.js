@@ -32,6 +32,12 @@ const reportSchema = new mongoose.Schema(
       default: null,
     },
 
+    sourceConsolidatedFinding: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ConsolidatedFinding",
+      default: null,
+    },
+
     iqaNumber: {
       type: String,
       required: true,
@@ -119,6 +125,8 @@ const reportSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+
+    actionProofFiles: { type: [String], default: [] },
 
     hasChecklist: {
       type: Boolean,
@@ -336,6 +344,21 @@ reportSchema.index(
   {
     unique: true,
     sparse: true,
+  }
+);
+
+
+/*
+ * A consolidated finding can generate at most one official IQR.
+ * The partial index excludes legacy reports and historical records.
+ */
+reportSchema.index(
+  { sourceConsolidatedFinding: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      sourceConsolidatedFinding: { $type: "objectId" },
+    },
   }
 );
 

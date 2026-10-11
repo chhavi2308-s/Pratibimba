@@ -17,7 +17,11 @@ import {
   verifyAndCloseReport,
 } from "../controllers/reportController.js";
 
+import { actionEvidenceUpload, uploadReportActionEvidence, downloadReportActionEvidence } from "../controllers/reportActionEvidenceController.js";
+
 const router = express.Router();
+router.post("/:id/action-evidence", authenticate, authorize("prakalpa_manager"), actionEvidenceUpload.single("file"), uploadReportActionEvidence);
+router.get("/:id/action-evidence/:fileId", authenticate, downloadReportActionEvidence);
 
 router.get(
   "/",

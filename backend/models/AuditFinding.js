@@ -139,6 +139,43 @@ const auditFindingSchema =
         trim: true,
       },
 
+      auditor: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+        index: true,
+      },
+
+      description: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      classification: {
+        type: String,
+        enum: [
+          "NC",
+          "OFI",
+        ],
+        default: null,
+        trim: true,
+      },
+
+      status: {
+        type: String,
+        enum: [
+          "DRAFT",
+          "SUBMITTED",
+        ],
+        default: "DRAFT",
+        index: true,
+      },
+
+      submittedAt: {
+        type: Date,
+        default: null,
+      },
 
       /*
        * Finding content.
@@ -192,11 +229,14 @@ const auditFindingSchema =
       workflowStatus: {
         type: String,
         enum: [
+          "auditor_draft",
           "submitted_to_lead",
           "returned_to_auditor",
           "approved_by_lead",
+          "discarded_by_lead",
           "submitted_to_coordinator",
           "converted_to_report",
+          "discarded_by_coordinator",
         ],
         default: "submitted_to_lead",
         index: true,
@@ -207,6 +247,25 @@ const auditFindingSchema =
         default: Date.now,
       },
 
+      // Lead review copy; the Auditor's original fields remain immutable.
+      leadEditedCopy: {
+        findings: { type: String, trim: true },
+        severity: { type: String, enum: ["open_for_improvement", "non_conformance"] },
+        editedAt: { type: Date },
+        editedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        revision: { type: Number, default: 0 },
+      },
+
+      leadEvidenceFiles: { type: [String], default: [] },
+      evidenceReviews: { type: [{
+        token: { type: String, required: true },
+        leadDropped: { type: Boolean, default: false },
+        coordinatorDropped: { type: Boolean, default: false },
+        leadReviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        coordinatorReviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        leadReviewedAt: Date,
+        coordinatorReviewedAt: Date,
+      }], default: [] },
       leadReviewRemarks: {
         type: String,
         default: "",
@@ -222,6 +281,17 @@ const auditFindingSchema =
         type: Date,
         default: null,
       },
+
+      coordinatorEditedCopy: {
+        findings: { type: String, trim: true },
+        severity: { type: String, enum: ["open_for_improvement", "non_conformance"] },
+        editedAt: Date,
+        editedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        revision: { type: Number, default: 0 },
+      },
+      coordinatorVerifiedAt: { type: Date, default: null },
+      coordinatorCompletedAt: { type: Date, default: null },
+      coordinatorCompletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 
       convertedToReportAt: {
         type: Date,

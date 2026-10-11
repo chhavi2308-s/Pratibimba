@@ -1,7 +1,16 @@
 import { body } from "express-validator";
 
 export const createPrakalpaValidator = [
+  body("initialLocation")
+    .isString()
+    .withMessage("Location is required to create a Prakalpa.")
+    .bail()
+    .trim()
+    .notEmpty()
+    .withMessage("Location is required to create a Prakalpa."),
+
   body("name")
+    .isString().bail()
     .trim()
     .notEmpty()
     .withMessage("Prakalpa name is required"),
@@ -44,6 +53,7 @@ export const createPrakalpaValidator = [
 export const updatePrakalpaValidator = [
   body("name")
     .optional()
+    .isString().bail()
     .trim()
     .notEmpty()
     .withMessage("Prakalpa name cannot be empty"),

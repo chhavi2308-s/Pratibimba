@@ -27,11 +27,10 @@ import {
   updateReport as updateReportApi,
 } from "../services/reportService";
 
-import { getRoles, updateRole as updateRoleApi } from "../services/roleService";
 
 import {
-  getUsers,
-  updateUser as updateUserApi,
+  getAuditPersonDirectory,
+  type AuditPerson,
 } from "../services/userService";
 
 import {
@@ -115,7 +114,6 @@ export const AUDIT_AREAS = [
 export type Role =
   | "super_admin"
   | "admin"
-  | "lead_auditor"
   | "audit_coordinator"
   | "auditor"
   | "prakalpa_manager";
@@ -194,6 +192,7 @@ export interface ScheduledAudit {
   auditCoordinator: string;
   prakalphaPramukh: string;
   auditAreas: string[];
+  workflowMode?: string;
   mailSent?: boolean;
   status?: "upcoming" | "ongoing" | "completed";
 }
@@ -269,31 +268,6 @@ export interface RolePermission {
 export const DEFAULT_ROLE_PERMISSIONS: Record<Role, RolePermission> = {
   super_admin: {
     role: "super_admin",
-    canCreateAuditPlan: false,
-    canScheduleAudit: false,
-    canEditReport: false,
-    canCloseReport: false,
-    canViewAllReports: true,
-    canManageRoles: false,
-    canManageUsers: true,
-    canViewDashboard: true,
-    canAddAuditor: false,
-    canAssignAuditCoordinator: false,
-    canAssignAuditors: false,
-    canAssignLeadAuditor: false,
-    canSubmitFindings: false,
-    canReviewFindings: false,
-    canSubmitFindingsToCoordinator: false,
-    canGenerateReport: false,
-    canSendReportToPrakalpa: false,
-    canSubmitCorrectiveAction: false,
-    canVerifyCorrectiveAction: false,
-    canManagePrakalpas: false,
-    canManageAdmins: true,
-  },
-
-  admin: {
-    role: "admin",
     canCreateAuditPlan: true,
     canScheduleAudit: false,
     canEditReport: false,
@@ -314,6 +288,31 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, RolePermission> = {
     canSubmitCorrectiveAction: false,
     canVerifyCorrectiveAction: false,
     canManagePrakalpas: true,
+    canManageAdmins: true,
+  },
+
+  admin: {
+    role: "admin",
+    canCreateAuditPlan: true,
+    canScheduleAudit: false,
+    canEditReport: false,
+    canCloseReport: false,
+    canViewAllReports: true,
+    canManageRoles: false,
+    canManageUsers: false,
+    canViewDashboard: true,
+    canAddAuditor: false,
+    canAssignAuditCoordinator: true,
+    canAssignAuditors: false,
+    canAssignLeadAuditor: false,
+    canSubmitFindings: false,
+    canReviewFindings: false,
+    canSubmitFindingsToCoordinator: false,
+    canGenerateReport: false,
+    canSendReportToPrakalpa: false,
+    canSubmitCorrectiveAction: false,
+    canVerifyCorrectiveAction: false,
+    canManagePrakalpas: false,
     canManageAdmins: false,
   },
 
@@ -342,30 +341,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, RolePermission> = {
     canManageAdmins: false,
   },
 
-  lead_auditor: {
-    role: "lead_auditor",
-    canCreateAuditPlan: false,
-    canScheduleAudit: false,
-    canEditReport: false,
-    canCloseReport: false,
-    canViewAllReports: false,
-    canManageRoles: false,
-    canManageUsers: false,
-    canViewDashboard: true,
-    canAddAuditor: false,
-    canAssignAuditCoordinator: false,
-    canAssignAuditors: false,
-    canAssignLeadAuditor: false,
-    canSubmitFindings: true,
-    canReviewFindings: true,
-    canSubmitFindingsToCoordinator: true,
-    canGenerateReport: false,
-    canSendReportToPrakalpa: false,
-    canSubmitCorrectiveAction: false,
-    canVerifyCorrectiveAction: false,
-    canManagePrakalpas: false,
-    canManageAdmins: false,
-  },
+
 
   auditor: {
     role: "auditor",
@@ -423,8 +399,8 @@ function daysFuture(n: number) { const d = new Date(); d.setDate(d.getDate() + n
 
 export const SEED_USERS: AppUser[] = [
   { id: "u-admin",  name: "Admin User",          email: "admin@rashtrotthana.org",        role: "admin",             active: true, createdDate: daysAgo(90) },
-  { id: "u-la-1",  name: "Ananya Iyer",          email: "ananya.iyer@rashtrotthana.org",  role: "lead_auditor",      active: true, createdDate: daysAgo(80) },
-  { id: "u-la-2",  name: "Priya Nair",           email: "priya.nair@rashtrotthana.org",   role: "lead_auditor",      active: true, createdDate: daysAgo(80) },
+  { id: "u-la-1",  name: "Ananya Iyer",          email: "ananya.iyer@rashtrotthana.org",  role: "auditor",      active: true, createdDate: daysAgo(80) },
+  { id: "u-la-2",  name: "Priya Nair",           email: "priya.nair@rashtrotthana.org",   role: "auditor",      active: true, createdDate: daysAgo(80) },
   { id: "u-ac-1",  name: "Deepa Menon",          email: "deepa.menon@rashtrotthana.org",  role: "audit_coordinator", active: true, createdDate: daysAgo(60), phone: "9845012345" },
   { id: "u-ac-2",  name: "Kiran Bhat",           email: "kiran.bhat@rashtrotthana.org",   role: "audit_coordinator", active: true, createdDate: daysAgo(55), phone: "9876543210" },
   { id: "u-ac-3",  name: "Suresh Kumar",         email: "suresh.kumar@rashtrotthana.org", role: "audit_coordinator", active: true, createdDate: daysAgo(50), phone: "9900112233" },
@@ -473,16 +449,15 @@ interface AppContextType {
   currentUser: CurrentUser;
   refreshLiveData: () => Promise<void>;
 
-  users: AppUser[];
-  auditorUsers: AppUser[];
-  coordinatorUsers: AppUser[];
+  users: Array<AuditPerson & { id: string }>;
+  auditorUsers: Array<AuditPerson & { id: string }>;
+  coordinatorUsers: Array<AuditPerson & { id: string }>;
   auditors: string[];
+  auditorDirectoryError: string | null;
 
   leadAuditorProfiles: LeadAuditorProfile[];
   updateLeadAuditorProfile: (id: string, data: Partial<LeadAuditorProfile>) => Promise<void>;
 
-  rolePermissions: Record<Role, RolePermission>;
-  updateRolePermission: (role: Role, data: Partial<RolePermission>) => Promise<void>;
 
   auditPlans: AuditPlan[];
   scheduledAudits: ScheduledAudit[];
@@ -506,9 +481,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     authenticationReady,
     setAuthenticationReady,
   ] = useState(false);
-  const [users, setUsers] = useState<AppUser[]>(SEED_USERS);
+  const [users, setUsers] = useState<Array<AuditPerson & { id: string }>>([]);
+  const [directoryAuditors, setDirectoryAuditors] = useState<string[]>([]);
+  const [auditorDirectoryError, setAuditorDirectoryError] =
+    useState<string | null>("Auditor directory is loading.");
   const [leadAuditorProfiles, setLeadAuditorProfiles] = useState<LeadAuditorProfile[]>(LEAD_AUDITOR_PROFILES);
-  const [rolePermissions, setRolePermissions] = useState<Record<Role, RolePermission>>(DEFAULT_ROLE_PERMISSIONS);
   const [auditPlans, setAuditPlans] = useState<AuditPlan[]>(seedPlans);
   const [scheduledAudits, setScheduledAudits] = useState<ScheduledAudit[]>(seedScheduled);
   const [reports, setReports] = useState<Report[]>(seedReports);
@@ -517,37 +494,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const loadLiveData = useCallback(async () => {
     try {
-      const [plansRes, scheduledRes, reportsRes, usersRes, rolesRes] = await Promise.all([
+      const [plansRes, scheduledRes, reportsRes] = await Promise.all([
         getAuditPlans().catch(() => seedPlans),
         getScheduledAudits().catch(() => seedScheduled),
         getReports().catch(() => seedReports),
-        getUsers().catch(() => SEED_USERS),
-        getRoles().catch(() => null),
       ]);
 
       const freshPlans = plansRes.data || plansRes || seedPlans;
       const freshScheduled = scheduledRes.data || scheduledRes || seedScheduled;
       const freshReports = reportsRes.data || reportsRes || seedReports;
-      const freshUsers = usersRes.data || usersRes || SEED_USERS;
 
       setAuditPlans([...freshPlans]);
       setScheduledAudits([...freshScheduled]);
       setReports([...freshReports]);
-      setUsers([...freshUsers]);
 
-      if (rolesRes && Array.isArray(rolesRes)) {
-        const mapped: Record<Role, RolePermission> = { ...DEFAULT_ROLE_PERMISSIONS };
-        rolesRes.forEach((r: any) => {
-          if (r.name && r.permissions) {
-            mapped[r.name as Role] = { role: r.name, ...r.permissions };
-          }
-        });
-        setRolePermissions(mapped);
+      try {
+        const response = await getAuditPersonDirectory();
+
+        if (!response.success || !Array.isArray(response.data)) {
+          throw new Error("Invalid audit-person directory response");
+        }
+
+        setUsers(response.data.map(person => ({ ...person, id: person._id })));
+        const names = response.data
+          .filter(person => person.role === "auditor")
+          .map((auditor) => auditor.name)
+          .filter((name) => typeof name === "string" && name.trim());
+
+        setDirectoryAuditors([...new Set(names)]);
+        setAuditorDirectoryError(null);
+      } catch (error) {
+        console.error("Auditor directory request failed");
+        setUsers([]);
+        setDirectoryAuditors([]);
+        setAuditorDirectoryError(
+          "Unable to load active auditors. Refresh and try again."
+        );
       }
+
     } catch (error) {
-      console.warn("Fallback to local dataset:", error);
+      console.warn("Fallback to local dataset");
     }
   }, []);
+
+  const refreshLiveData = useCallback(async () => {
+    try {
+      // Refresh only the authenticated identity supplied by the server.
+      setCurrentUser(await getAuthenticatedUser() as CurrentUser);
+    } catch {
+      clearAuthenticatedSession();
+      window.location.replace("/login");
+      return;
+    }
+    await loadLiveData();
+  }, [loadLiveData]);
 
   /*
    * Resolve authenticated identity from the backend before
@@ -564,8 +564,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!hasAuthenticationToken()) {
           clearAuthenticatedSession();
 
+          /*
+           * A missing token is normal on public authentication pages.
+           * Do not reload /login from AppProvider because AppProvider
+           * also wraps the login page, which would create an infinite
+           * full-page reload loop.
+           */
           if (!cancelled) {
-            window.location.replace("/login");
+            setAuthenticationReady(true);
           }
 
           return;
@@ -585,10 +591,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           setAuthenticationReady(true);
         } catch (error) {
-          console.warn(
-            "Authentication validation failed:",
-            error
-          );
+          console.warn("Authentication validation failed");
 
           clearAuthenticatedSession();
 
@@ -606,7 +609,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!authenticationReady) {
+    /*
+     * authenticationReady means the authentication check has finished.
+     * It does NOT mean that an authenticated session exists.
+     *
+     * Public pages such as /login must never bootstrap protected
+     * application data without a backend-issued authentication token.
+     */
+    if (
+      !authenticationReady ||
+      !hasAuthenticationToken()
+    ) {
       return;
     }
 
@@ -616,49 +629,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadLiveData,
   ]);
 
-  const updateRolePermission = useCallback(async (role: Role, data: Partial<RolePermission>) => {
-    const previousRolePerms = rolePermissions[role];
-    const updatedRolePerms = {
-      ...previousRolePerms,
-      ...data,
-    };
-
-    setRolePermissions((prev) => ({
-      ...prev,
-      [role]: updatedRolePerms,
-    }));
-
-    try {
-      await updateRoleApi(
-        role,
-        updatedRolePerms
-      );
-    } catch (err) {
-      /*
-       * Backend persistence is authoritative.
-       * Roll back the optimistic UI update if persistence fails.
-       */
-      setRolePermissions((prev) => ({
-        ...prev,
-        [role]: previousRolePerms,
-      }));
-
-      console.error(
-        "Role permission persistence failed:",
-        err
-      );
-
-      throw err;
-    }
-  }, [rolePermissions]);
-
   const updateLeadAuditorProfile = useCallback(async (id: string, data: Partial<LeadAuditorProfile>) => {
     setLeadAuditorProfiles((prev) => prev.map((p) => p.id === id ? { ...p, ...data } : p));
   }, []);
 
-  const auditorUsers = users.filter((u) => u.role === "auditor" && u.active);
-  const coordinatorUsers = users.filter((u) => u.role === "audit_coordinator" && u.active);
-  const auditors = auditorUsers.map((u) => u.name);
+  const auditorUsers = users.filter((u) => u.role === "auditor");
+  const coordinatorUsers = users.filter((u) => u.role === "audit_coordinator");
+  const auditors = directoryAuditors;
 
   const markNotificationRead = useCallback(
     (id: string) => {
@@ -702,10 +679,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   return (
     <AppContext.Provider value={{
-      currentUser, refreshLiveData: loadLiveData,
-      users, auditorUsers, coordinatorUsers, auditors,
+      currentUser, refreshLiveData,
+      users, auditorUsers, coordinatorUsers, auditors, auditorDirectoryError,
       leadAuditorProfiles, updateLeadAuditorProfile,
-      rolePermissions, updateRolePermission,
       auditPlans, scheduledAudits, reports, notifications,
       markNotificationRead, markAllNotificationsRead,
       getDaysOpen, isRedFlagged, isOverdue,

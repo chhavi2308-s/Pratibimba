@@ -1,6 +1,6 @@
+import { readFileSync, statSync } from "node:fs";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import connectDB from "../config/db.js";
 
 import Domain from "../models/Domain.js";
 import Location from "../models/Location.js";
@@ -8,7 +8,90 @@ import User from "../models/User.js";
 
 dotenv.config();
 
-await connectDB();
+// Supply a private JSON object mapping each account email to its initial password.
+// Only the file path is configured; password values never appear in CLI arguments.
+function readInitialPasswords(emails) {
+  const file = process.env.PRATIBIMBA_INITIAL_PASSWORDS_FILE;
+  if (!file) throw new Error("Private initial-password configuration is required.");
+  const info = statSync(file);
+  if (!info.isFile() || (info.mode & 0o077) || info.uid !== process.getuid()) {
+    throw new Error("Initial-password file must be owner-only (0600 or stricter).");
+  }
+  const values = JSON.parse(readFileSync(file, "utf8"));
+  if (!values || typeof values !== "object" || Array.isArray(values)) {
+    throw new Error("Invalid initial-password configuration.");
+  }
+  for (const email of emails) {
+    if (!Object.hasOwn(values, email) || typeof values[email] !== "string" || values[email].length < 12) {
+      throw new Error("Every initial account requires an explicitly supplied strong password.");
+    }
+  }
+  return values;
+}
+
+async function seedMasterData() {
+const users = [
+  {
+    name: "Lokesh B.S",
+    email: "lokesh.bs@audit.local",
+    phone: "9000000001",
+
+    role: "auditor",
+    domain: "Mudranalaya",
+    assignedDomains: [
+      "Mudranalaya",
+      "Seva Vasati",
+      "JGRV Kalyan Nagar"
+    ],
+    active: true
+  },
+
+  {
+    name: "Vani.M",
+    email: "vani.m@audit.local",
+    phone: "9000000002",
+
+    role: "audit_coordinator",
+    domain: "Yoga Kendra",
+    assignedDomains: [
+      "Yoga Kendra",
+      "Blood Center - Bangalore",
+      "RV-Chitradurga"
+    ],
+    active: true
+  },
+
+  {
+    name: "Paniraj",
+    email: "paniraj@audit.local",
+    phone: "9000000003",
+
+    role: "auditor",
+    domain: "Mudranalaya",
+    assignedDomains: [
+      "Mudranalaya"
+    ],
+    active: true
+  },
+
+  {
+    name: "Ashish Sabnis",
+    email: "ashish.sabnis@audit.local",
+    phone: "9000000004",
+
+    role: "auditor",
+    domain: "Mudranalaya",
+    assignedDomains: [
+      "Mudranalaya"
+    ],
+    active: true
+  }
+];
+
+const initialPasswords = readInitialPasswords(users.map(user => user.email));
+
+// Keep connection failures inside the sanitized setup error handler.
+await mongoose.connect(process.env.MONGO_URI);
 
 console.log("Connected to:", mongoose.connection.name);
 
@@ -123,74 +206,17 @@ for (const location of locations) {
 //
 // =====================================================
 
-const users = [
-  {
-    name: "Lokesh B.S",
-    email: "lokesh.bs@audit.local",
-    phone: "9000000001",
-    password: "ChangeMe123!",
-    role: "auditor",
-    domain: "Mudranalaya",
-    assignedDomains: [
-      "Mudranalaya",
-      "Seva Vasati",
-      "JGRV Kalyan Nagar"
-    ],
-    active: true
-  },
 
-  {
-    name: "Vani.M",
-    email: "vani.m@audit.local",
-    phone: "9000000002",
-    password: "ChangeMe123!",
-    role: "audit_coordinator",
-    domain: "Yoga Kendra",
-    assignedDomains: [
-      "Yoga Kendra",
-      "Blood Center - Bangalore",
-      "RV-Chitradurga"
-    ],
-    active: true
-  },
-
-  {
-    name: "Paniraj",
-    email: "paniraj@audit.local",
-    phone: "9000000003",
-    password: "ChangeMe123!",
-    role: "auditor",
-    domain: "Mudranalaya",
-    assignedDomains: [
-      "Mudranalaya"
-    ],
-    active: true
-  },
-
-  {
-    name: "Ashish Sabnis",
-    email: "ashish.sabnis@audit.local",
-    phone: "9000000004",
-    password: "ChangeMe123!",
-    role: "lead_auditor",
-    domain: "Mudranalaya",
-    assignedDomains: [
-      "Mudranalaya"
-    ],
-    active: true
-  }
-];
 
 for (const user of users) {
-  await User.findOneAndUpdate(
-    { email: user.email },
-    user,
-    {
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true
-    }
-  );
+  const existing = await User.findOne({ email: user.email });
+  if (existing) {
+    // Keep the original profile/assignment update behavior without touching passwords.
+    await User.findOneAndUpdate({ email: user.email }, user, { new: true });
+  } else {
+    // User.save middleware hashes new passwords; query upserts do not run it.
+    await User.create({ ...user, password: initialPasswords[user.email] });
+  }
 }
 
 // =====================================================
@@ -237,3 +263,10 @@ console.table(userDocs);
 await mongoose.disconnect();
 
 console.log("\nDisconnected.");
+}
+
+seedMasterData().catch(async () => {
+  console.error("Master-data setup failed; no credential details are logged.");
+  await mongoose.disconnect().catch(() => {});
+  process.exitCode = 1;
+});

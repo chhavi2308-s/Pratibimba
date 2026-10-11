@@ -178,3 +178,16 @@ export const verifyAndCloseReport = async (
 
   return res.data.data;
 };
+
+export const uploadReportActionProof = async (id: string, file: File) => {
+  const body = new FormData(); body.append("file", file);
+  const response = await api.post(`/reports/${id}/action-evidence`, body);
+  return response.data.data as { token: string; name: string };
+};
+export const downloadReportActionProof = async (id: string, token: string) => {
+  const fileId = token.replace(/^action-evidence:/, "");
+  const response = await api.get(`/reports/${id}/action-evidence/${encodeURIComponent(fileId)}`, { responseType: "blob" });
+  const url = URL.createObjectURL(response.data);
+  window.open(url, "_blank", "noopener,noreferrer");
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};

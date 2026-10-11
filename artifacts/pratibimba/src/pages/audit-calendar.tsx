@@ -1,3 +1,5 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
 import { useState, useMemo, useEffect } from "react";
 import { Link } from "wouter";
 import { useApp, PRAKALPAS } from "../context/app-context";
@@ -201,16 +203,7 @@ export default function AuditCalendarPage() {
             </span>
             List View
           </Link>
-          <select
-            value={filterPrakalpa}
-            onChange={(e) => setFilterPrakalpa(e.target.value)}
-            className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none"
-          >
-            <option value="All">All Prakalpas</option>
-            {PRAKALPAS.map((d) => (
-              <option key={d}>{d}</option>
-            ))}
-          </select>
+
           <div className="flex rounded-lg overflow-hidden border border-outline-variant/40">
             <button
               onClick={() => setView("month")}
@@ -235,6 +228,14 @@ export default function AuditCalendarPage() {
           </div>
         </div>
       </div>
+
+      <FilterToolbar
+        filters={[
+        ...(filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : [])
+        ]}
+        onClearAll={() => setFilterPrakalpa("All")} resultCount={events.length} resultLabel="audits match">
+        <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={[...new Set(auditPlans.map(p => p.prakalpa).filter(Boolean))].map(value => ({ value, label: value }))} searchable allLabel="All Prakalpas" />
+      </FilterToolbar>
 
       {view === "month" ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

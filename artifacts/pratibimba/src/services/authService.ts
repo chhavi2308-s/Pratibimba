@@ -7,7 +7,6 @@ export interface AuthenticatedUser {
   role:
     | "super_admin"
     | "admin"
-    | "lead_auditor"
     | "audit_coordinator"
     | "auditor"
     | "prakalpa_manager";

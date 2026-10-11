@@ -1,4 +1,11 @@
+import mongoose from "mongoose";
 import ScheduledAudit from "../models/ScheduledAudit.js";
+import AuditFinding from "../models/AuditFinding.js";
+import ConsolidatedFinding from "../models/ConsolidatedFinding.js";
+import Report from "../models/Report.js";
+import CoordinatorBatchClosure from "../models/CoordinatorBatchClosure.js";
+import { assertConsolidatedAuditReadyForCompletion } from "./consolidatedCompletionGuard.js";
+import { acquireConsolidatedAuditWriteBarrier } from "./consolidatedAuditWriteBarrier.js";
 import User from "../models/User.js";
 import AuditPlan from "../models/AuditPlan.js";
 import AppError from "../utils/AppError.js";
@@ -51,17 +58,13 @@ const getScheduledAuditJurisdiction = (user) => {
     };
   }
 
-  // Lead sees only audits where explicitly assigned as Lead.
-  if (role === "lead_auditor") {
-    return {
-      leadAuditor: name,
-    };
-  }
-
-  // Auditor sees only audits in their assigned team.
+  // Auditor sees audits assigned to them as a team member or Lead Auditor.
   if (role === "auditor") {
     return {
-      auditors: name,
+      $or: [
+        { auditors: name },
+        { leadAuditor: name },
+      ],
     };
   }
 
@@ -100,9 +103,121 @@ export const getScheduledAudits = async (
       String(query.location).trim();
   }
 
-  return await ScheduledAudit.find(filter).sort({
+  const audits = await ScheduledAudit.find(filter).sort({
     createdAt: -1,
   });
+
+  /*
+   * Keep the Scheduled Audit document permanently.
+   * Only remove a fully reported IQA from the ACTIVE listing.
+   *
+   * This is intentionally fail-open for visibility:
+   * missing, incomplete or inconsistent report references
+   * keep the IQA visible so it can be recovered.
+   */
+  const completed = audits.filter(
+    (audit) => audit.status === "completed"
+  );
+
+  if (completed.length === 0) {
+    return audits;
+  }
+
+  const ids = completed.map((audit) => audit._id);
+
+  const [originals, consolidated, reports, closures] = await Promise.all([
+    AuditFinding.find({
+      scheduledAudit: { $in: ids },
+    })
+      .select("_id scheduledAudit workflowStatus")
+      .lean(),
+    ConsolidatedFinding.find({
+      scheduledAudit: { $in: ids },
+    })
+      .select("_id scheduledAudit workflowStatus")
+      .lean(),
+    Report.find({
+      scheduledAudit: { $in: ids },
+    })
+      .select(
+        "_id scheduledAudit sourceFinding sourceConsolidatedFinding"
+      )
+      .lean(),
+    CoordinatorBatchClosure.find({scheduledAudit:{$in:ids}}).select("scheduledAudit").lean(),
+  ]);
+
+  const groupedOriginals = new Map();
+  const groupedConsolidated = new Map();
+  const reportedOriginalIds = new Set();
+  const reportedConsolidatedIds = new Set();
+
+  for (const finding of originals) {
+    const key = String(finding.scheduledAudit);
+    if (!groupedOriginals.has(key)) {
+      groupedOriginals.set(key, []);
+    }
+    groupedOriginals.get(key).push(finding);
+  }
+
+  for (const finding of consolidated) {
+    const key = String(finding.scheduledAudit);
+    if (!groupedConsolidated.has(key)) {
+      groupedConsolidated.set(key, []);
+    }
+    groupedConsolidated.get(key).push(finding);
+  }
+
+  for (const report of reports) {
+    const auditId = String(report.scheduledAudit);
+    if (report.sourceFinding) {
+      reportedOriginalIds.add(
+        auditId + ":" + String(report.sourceFinding)
+      );
+    }
+    if (report.sourceConsolidatedFinding) {
+      reportedConsolidatedIds.add(
+        auditId + ":" + String(report.sourceConsolidatedFinding)
+      );
+    }
+  }
+
+  const closedLegacyIds = new Set(closures.map(c=>String(c.scheduledAudit)));
+  const fullyReportedIds = new Set(closedLegacyIds);
+
+  for (const audit of completed) {
+    const key = String(audit._id);
+    const isConsolidated =
+      audit.workflowMode === "consolidated";
+
+    const findings = isConsolidated
+      ? (groupedConsolidated.get(key) || [])
+      : (groupedOriginals.get(key) || []);
+
+    const reportedIds = isConsolidated
+      ? reportedConsolidatedIds
+      : reportedOriginalIds;
+
+    /*
+     * Zero findings must not cause an audit to disappear.
+     * Every applicable finding must have been converted AND
+     * must have a corresponding official Report record.
+     */
+    const allReported =
+      findings.length > 0 &&
+      findings.every(
+        (finding) =>
+          (finding.workflowStatus === "discarded_by_lead" || finding.workflowStatus === "discarded_by_coordinator" || (finding.workflowStatus === "converted_to_report" &&
+          reportedIds.has(key + ":" + String(finding._id))))
+      );
+
+    if (allReported) {
+      fullyReportedIds.add(key);
+    }
+  }
+
+  return audits.filter(
+    (audit) => !fullyReportedIds.has(String(audit._id))
+  );
 };
 
 
@@ -168,7 +283,8 @@ const getManagedScheduledAudit = async (
   };
 
   if (
-    role === "admin"
+    role === "admin" ||
+    role === "super_admin"
   ) {
     // Administrative management authority.
   } else if (
@@ -217,6 +333,29 @@ export const updateScheduledAudit = async (
       id,
       user
     );
+
+  if (
+    Object.prototype.hasOwnProperty.call(
+      data,
+      "workflowMode"
+    )
+  ) {
+    throw new AppError(
+      "Scheduled Audit workflow mode cannot be changed through this endpoint.",
+      400
+    );
+  }
+
+  if (
+    audit.workflowMode !== undefined &&
+    audit.workflowMode !== "legacy" &&
+    audit.workflowMode !== "consolidated"
+  ) {
+    throw new AppError(
+      "Scheduled Audit has an invalid workflow mode and requires administrative review.",
+      409
+    );
+  }
 
   /*
    * Completed audits are historical records.
@@ -324,16 +463,23 @@ export const updateScheduledAudit = async (
    * Validate instead that the selected person is an active
    * Lead Auditor account.
    */
+  if (!nextAuditors.includes(nextLeadAuditor)) {
+    throw new AppError(
+      "Lead Auditor must be one of the assigned auditors.",
+      400
+    );
+  }
+
   const leadAuditorUser =
     await User.findOne({
       name: nextLeadAuditor,
-      role: "lead_auditor",
+      role: "auditor",
       active: true,
     }).select("_id name role active");
 
   if (!leadAuditorUser) {
     throw new AppError(
-      "Selected Lead Auditor is not an active Lead Auditor account.",
+      "Selected Lead Auditor must be an active Auditor account.",
       400
     );
   }
@@ -437,63 +583,91 @@ export const completeScheduledAudit = async (
   id,
   user
 ) => {
-  const audit =
-    await getManagedScheduledAudit(
-      id,
-      user
-    );
+  // Preserve the existing management authorization.
+  const audit = await getManagedScheduledAudit(id, user);
 
   if (audit.status === "completed") {
     return audit;
   }
 
-  const now = new Date();
+  const validateEndDate = (record) => {
+    const endDate = new Date(record.endDate);
 
-  const endDate =
-    new Date(
-      audit.endDate
-    );
+    if (Number.isNaN(endDate.getTime())) {
+      throw new AppError(
+        "Scheduled audit has an invalid End Date.",
+        400
+      );
+    }
 
-  if (
-    Number.isNaN(
-      endDate.getTime()
-    )
-  ) {
-    throw new AppError(
-      "Scheduled audit has an invalid End Date.",
-      400
-    );
+    if (new Date() < endDate) {
+      throw new AppError(
+        "This audit cannot be marked completed before its End Date.",
+        400
+      );
+    }
+  };
+
+  validateEndDate(audit);
+
+  // Historical legacy completion behavior is unchanged.
+  if (audit.workflowMode !== "consolidated") {
+    await assertConsolidatedAuditReadyForCompletion(audit);
+
+    audit.status = "completed";
+    await audit.save();
+
+    if (audit.auditPlan) {
+      const auditPlan = await AuditPlan.findById(audit.auditPlan);
+
+      if (auditPlan) {
+        auditPlan.status = "completed";
+        await auditPlan.save();
+      }
+    }
+
+    return audit;
   }
 
-  if (now < endDate) {
-    throw new AppError(
-      "This audit cannot be marked completed before its End Date.",
-      400
-    );
-  }
+  const session = await mongoose.startSession();
 
-  audit.status = "completed";
-
-  await audit.save();
-
-  /*
-   * Synchronize parent AuditPlan.
-   */
-  if (audit.auditPlan) {
-    const auditPlan =
-      await AuditPlan.findById(
-        audit.auditPlan
+  try {
+    const completedAudit = await session.withTransaction(async () => {
+      // This document write serializes completion with all
+      // consolidated-mode operations using the same barrier.
+      const lockedAudit = await acquireConsolidatedAuditWriteBarrier(
+        audit._id,
+        session
       );
 
-    if (auditPlan) {
-      auditPlan.status =
-        "completed";
+      validateEndDate(lockedAudit);
 
-      await auditPlan.save();
-    }
+      await assertConsolidatedAuditReadyForCompletion(
+        lockedAudit,
+        session
+      );
+
+      lockedAudit.status = "completed";
+      await lockedAudit.save({ session });
+
+      if (lockedAudit.auditPlan) {
+        const auditPlan = await AuditPlan.findById(
+          lockedAudit.auditPlan
+        ).session(session);
+
+        if (auditPlan) {
+          auditPlan.status = "completed";
+          await auditPlan.save({ session });
+        }
+      }
+
+      return lockedAudit;
+    });
+
+    return completedAudit;
+  } finally {
+    await session.endSession();
   }
-
-  return audit;
 };
 
 export const deleteScheduledAudit = async (

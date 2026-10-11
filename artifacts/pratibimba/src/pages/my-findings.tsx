@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useApp } from "../context/app-context";
+import FindingEvidence from "../components/finding-evidence";
 
 import {
   getAuditFindings,
@@ -484,6 +485,15 @@ export default function MyFindingsPage() {
                               </div>
                             )}
 
+
+                            <div className="mt-5">
+                              <FindingEvidence
+                                findingId={id}
+                                files={finding.proofFiles}
+                                leadFiles={finding.leadEvidenceFiles}
+                                reviews={finding.evidenceReviews}
+                              />
+                            </div>
 
                             {isReturned && (
                               <div className="mt-5 flex justify-end">

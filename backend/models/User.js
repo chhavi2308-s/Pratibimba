@@ -36,7 +36,6 @@ const userSchema = new mongoose.Schema(
       enum: [
         "super_admin",
         "admin",
-        "lead_auditor",
         "audit_coordinator",
         "auditor",
         "prakalpa_manager",
@@ -53,6 +52,8 @@ const userSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+
+    passwordChangedAt: { type: Date, default: null },
 
     active: {
       type: Boolean,

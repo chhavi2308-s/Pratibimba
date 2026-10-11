@@ -9,6 +9,7 @@ import cookieParser from "cookie-parser";
 import connectDB from "./config/db.js";
 
 import authRoutes from "./routes/authRoutes.js";
+import accountRoutes from "./routes/accountRoutes.js";
 import roleRoutes from "./routes/roleRoutes.js";
 import domainRoutes from "./routes/domainRoutes.js";
 import prakalpaRoutes from "./routes/prakalpaRoutes.js";
@@ -20,6 +21,7 @@ import notFound from "./middleware/notFound.js";
 import errorHandler from "./middleware/errorHandler.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import auditFindingRoutes from "./routes/auditFindingRoutes.js";
+import activityLogRoutes from "./routes/activityLogRoutes.js";
 
 dotenv.config();
 
@@ -115,6 +117,7 @@ app.get("/api/v1/health", (req, res) => {
 // ======================
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/account", accountRoutes);
 app.use("/api/v1/roles", roleRoutes);
 app.use("/api/v1/domains", domainRoutes); // temporary legacy compatibility
 app.use("/api/v1/prakalpas", prakalpaRoutes);
@@ -124,6 +127,7 @@ app.use("/api/v1/audit-plans", auditPlanRoutes);
 app.use("/api/v1/scheduled-audits", scheduledAuditRoutes);
 app.use("/api/v1/reports", reportRoutes);
 app.use("/api/v1/audit-findings", auditFindingRoutes);
+app.use("/api/v1/activity-logs", activityLogRoutes);
 
 // ======================
 // Error Handling

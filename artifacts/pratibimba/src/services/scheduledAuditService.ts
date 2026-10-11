@@ -1,15 +1,16 @@
 import api from "./api";
+import type { ScheduledAudit } from "../context/app-context";
 
-function withId<T extends Record<string, any>>(
+function withId<T extends object>(
   doc: T
 ): T {
   if (!doc) return doc;
 
+  const record = doc as T & { id?: string; _id?: string };
+
   return {
-    ...doc,
-    id:
-      doc.id ||
-      doc._id,
+    ...record,
+    id: record.id || record._id,
   };
 }
 
@@ -30,15 +31,18 @@ export const getScheduledAudits =
   };
 
 export const getScheduledAuditById =
-  async (id: string) => {
+  async (id: string): Promise<ScheduledAudit> => {
     const res =
       await api.get(
         `/scheduled-audits/${id}`
       );
 
-    return withId(
-      res.data.data
-    );
+    const audit = res.data?.data;
+    if (!audit || typeof audit !== "object") {
+      throw new Error("Scheduled Audit response was invalid.");
+    }
+
+    return withId(audit) as ScheduledAudit;
   };
 
 export const updateScheduledAudit =

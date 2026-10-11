@@ -1,9 +1,20 @@
 import PDFDocument from "pdfkit";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import Report from "../models/Report.js";
 import ScheduledAudit from "../models/ScheduledAudit.js";
 import AuditPlan from "../models/AuditPlan.js";
 import AppError from "../utils/AppError.js";
 import { sendMail } from "./emailService.js";
+
+// pratibimba-iqr-history-v1: preserve submission snapshots in the Report model's existing history subdocuments.
+const iqrHistoryPath = Report.schema.path("workflowHistory");
+if (!iqrHistoryPath?.schema) throw new Error("Report.workflowHistory must be a document array");
+iqrHistoryPath.schema.add({
+  actionTakenSnapshot: { type: String, default: "" },
+  completionRemarksSnapshot: { type: String, default: "" },
+  actionProofFilesSnapshot: { type: [String], default: [] },
+});
 
 const assertCanManageScheduledAuditReports = (
   audit,
@@ -106,6 +117,13 @@ export const createReport = async (
     audit,
     currentUser
   );
+
+  if (audit.workflowMode === "consolidated") {
+    throw new AppError(
+      "This audit uses consolidated findings. Generate official IQRs through the Coordinator consolidated-findings workflow.",
+      409
+    );
+  }
 
   // Validate top-level observations array
   if (!Array.isArray(data.observations) || data.observations.length === 0) {
@@ -241,10 +259,6 @@ export const createReport = async (
  *   -> reports belonging to ScheduledAudits where the user is
  *      the assigned Audit Coordinator
  *
- * lead_auditor
- *   -> reports belonging to ScheduledAudits where the user is
- *      the assigned Lead Auditor
- *
  * auditor
  *   -> reports belonging to ScheduledAudits where the user is
  *      present in auditors[]
@@ -294,7 +308,6 @@ const getScheduledAuditIdsForUser = async (
    */
   if (
     role === "audit_coordinator" ||
-    role === "lead_auditor" ||
     role === "auditor"
   ) {
     if (!userName) {
@@ -316,12 +329,6 @@ const getScheduledAuditIdsForUser = async (
       };
       break;
 
-
-    case "lead_auditor":
-      auditFilter = {
-        leadAuditor: userName,
-      };
-      break;
 
 
     case "auditor":
@@ -463,47 +470,70 @@ export const getReportById = async (
 // an email attachment).
 const buildReportDocument = (report) => {
   const doc = new PDFDocument({
-    size: "A4",
-    margin: 50,
+    size: "A4", margin: 52, margins: {top: 116, bottom: 70, left: 56, right: 56},
+    bufferPages: true,
   });
+  const assetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets");
+  const paintPage = () => {
+    const {width,height} = doc.page;
+    doc.save();
+    doc.lineWidth(0.85).strokeColor("#aeb9c0").rect(24,24,width-48,height-48).stroke();
+    doc.image(path.join(assetsDir,"pratibimba-report.png"),42,31,{fit:[98,68]});
+    doc.image(path.join(assetsDir,"rashtrotthana-report.png"),width-218,39,{fit:[174,52],align:"right"});
+    doc.moveTo(42,105).lineTo(width-42,105).lineWidth(0.75).strokeColor("#aeb9c0").stroke();
+    doc.moveTo(42,height-52).lineTo(width-42,height-52).lineWidth(.6).strokeColor("#cbd5e1").stroke();
+    const savedBottom = doc.page.margins.bottom;
+    doc.page.margins.bottom = 30;
+    doc.font("Helvetica").fontSize(8).fillColor("#64748b").text("PRATIBIMBA  |  Internal Quality Audit",46,height-46,{lineBreak:false});
+    doc.page.margins.bottom = savedBottom;
+    doc.restore();
+    doc.x = 56; doc.y = 116;
+  };
+  paintPage();
+  doc.on("pageAdded",paintPage);
+  doc.fillColor("#203440");
 
   doc.info.Title = `Audit Report - ${report.iqrNumber}`;
   doc.info.Author = "Pratibimba Audit Management System";
 
   doc.fontSize(20)
     .font("Helvetica-Bold")
-    .text("PRATIBIMBA AUDIT REPORT", {
+    .text("INTERNAL QUALITY AUDIT REPORT", {
       align: "center",
     });
 
   doc.moveDown(0.5);
 
-  doc.fontSize(13)
-    .font("Helvetica-Bold")
+  doc.fontSize(12)
+    .font("Helvetica-BoldOblique")
     .text(report.iqrNumber, {
       align: "center",
     });
 
-  doc.moveDown(1.5);
+  doc.moveDown(1);
 
   const addField = (label, value) => {
     doc
-      .fontSize(10)
-      .font("Helvetica-Bold")
+      .fontSize(10.5)
+      .font("Helvetica-BoldOblique")
       .text(`${label}: `, {
         continued: true,
       })
       .font("Helvetica")
+      .fontSize(10.5)
       .text(value || "—");
 
-    doc.moveDown(0.35);
+    doc.moveDown(0.52);
   };
 
   addField("IQA Number", report.iqaNumber);
+  if (Array.isArray(report.proofFiles) && report.proofFiles.length) {
+    addField("Evidence attachments", `${report.proofFiles.length} stored file reference(s). Access authenticated originals through the finding in Pratibimba.`);
+    report.proofFiles.forEach((file, i) => addField(`Evidence ${i + 1}`, String(file)));
+  }
   addField("Prakalpa", report.prakalpa);
   addField("Location", report.location);
   addField("Sublocation", report.sublocation);
-  addField("Prakalpa", report.prakalpa);
   addField("Audit Coordinator", report.auditCoordinator);
   addField(
     "Auditors",
@@ -540,8 +570,8 @@ const buildReportDocument = (report) => {
   doc.moveDown(1);
 
   doc
-    .fontSize(13)
-    .font("Helvetica-Bold")
+    .fontSize(13.5)
+    .font("Helvetica-BoldOblique")
     .text("Finding");
 
   doc.moveDown(0.5);
@@ -556,8 +586,8 @@ const buildReportDocument = (report) => {
   doc.moveDown(1);
 
   doc
-    .fontSize(11)
-    .font("Helvetica-Bold")
+    .fontSize(13.5)
+    .font("Helvetica-BoldOblique")
     .text("Classification");
 
   doc.moveDown(0.35);
@@ -575,9 +605,9 @@ const buildReportDocument = (report) => {
     doc.moveDown(1);
 
     doc
-      .fontSize(13)
-      .font("Helvetica-Bold")
-      .text("Action Taken");
+      .fontSize(13.5)
+    .font("Helvetica-BoldOblique")
+    .text("Action Taken");
 
     doc.moveDown(0.5);
 
@@ -593,9 +623,9 @@ const buildReportDocument = (report) => {
     doc.moveDown(1);
 
     doc
-      .fontSize(13)
-      .font("Helvetica-Bold")
-      .text("Completion Remarks");
+      .fontSize(13.5)
+    .font("Helvetica-BoldOblique")
+    .text("Completion Remarks");
 
     doc.moveDown(0.5);
 
@@ -611,9 +641,9 @@ const buildReportDocument = (report) => {
     doc.moveDown(1);
 
     doc
-      .fontSize(11)
-      .font("Helvetica-Bold")
-      .text("Closure");
+      .fontSize(13.5)
+    .font("Helvetica-BoldOblique")
+    .text("Closure");
 
     doc.moveDown(0.35);
 
@@ -626,18 +656,7 @@ const buildReportDocument = (report) => {
     );
   }
 
-  doc.moveDown(1.5);
-
-  doc
-    .fontSize(8)
-    .font("Helvetica")
-    .fillColor("#666666")
-    .text(
-      "Generated by Pratibimba Audit Management System",
-      {
-        align: "center",
-      }
-    );
+  doc.moveDown(0.5);
 
   return doc;
 };
@@ -1085,6 +1104,9 @@ const appendReportWorkflowHistory = (
     currentUser,
     remarks = "",
     performedAt = new Date(),
+    actionTakenSnapshot = "",
+    completionRemarksSnapshot = "",
+    actionProofFilesSnapshot = [],
   }
 ) => {
   if (!Array.isArray(report.workflowHistory)) {
@@ -1103,6 +1125,9 @@ const appendReportWorkflowHistory = (
     remarks:
       normalizeIdentity(remarks),
     performedAt,
+    actionTakenSnapshot,
+    completionRemarksSnapshot,
+    actionProofFilesSnapshot,
   });
 };
 
@@ -1356,8 +1381,7 @@ export const submitPrakalpaCorrectiveAction = async (
       );
     }
 
-    report.proofFiles =
-      data.proofFiles;
+    throw new AppError("Upload corrective-action proof through the secure evidence endpoint.", 400);
   }
 
   const fromStatus =
@@ -1385,6 +1409,9 @@ export const submitPrakalpaCorrectiveAction = async (
     {
       action:
         "action_submitted",
+      actionTakenSnapshot: actionTaken,
+      completionRemarksSnapshot: completionRemarks,
+      actionProofFilesSnapshot: [...(report.actionProofFiles || [])],
       fromStatus,
       toStatus:
         "action_submitted",
@@ -1416,7 +1443,7 @@ export const updateReport = async (
   currentUser
 ) => {
   const {
-    report,
+    report, audit,
   } = await getManageableReport(
     id,
     currentUser
@@ -1443,12 +1470,34 @@ export const updateReport = async (
    *   verification metadata
    */
 
+  if (normalizeIdentity(currentUser?.role) !== "audit_coordinator" ||
+      normalizeIdentity(currentUser?.name) !== normalizeIdentity(audit?.auditCoordinator)) {
+    throw new AppError("Only the assigned Audit Coordinator may edit the report.", 403);
+  }
+  if (report.workflowStatus === "verified_closed" || report.status === "closed") {
+    throw new AppError("A closed IQR cannot be edited.", 409);
+  }
+  if (report.workflowStatus === "action_submitted") {
+    throw new AppError("Review the submitted action first; return it before editing and resharing.", 409);
+  }
+  const changed = (data.findings !== undefined && data.findings !== report.findings) ||
+    (data.severity !== undefined && data.severity !== report.severity);
   if (data.findings !== undefined) {
     report.findings = data.findings;
   }
 
   if (data.severity !== undefined) {
     report.severity = data.severity;
+  }
+  if (changed) {
+    report.mailSent = false;
+    report.mailSentAt = null;
+    report.mailSentTo = [];
+    appendReportWorkflowHistory(report, {
+      action: "coordinator_edited", fromStatus: report.workflowStatus,
+      toStatus: report.workflowStatus, currentUser,
+      remarks: "Coordinator edited the IQR; email reshare required.", performedAt: new Date(),
+    });
   }
 
   await report.save();
@@ -1562,6 +1611,10 @@ export const returnReportToPrakalpa = async (
 
   report.workflowStatus =
     "returned_to_prakalpa";
+  // A returned IQR must be reshared; other IQRs in the audit retain their own status.
+  report.mailSent = false;
+  report.mailSentAt = null;
+  report.mailSentTo = [];
 
   /*
    * This is not a verification/closure, therefore verifiedBy
