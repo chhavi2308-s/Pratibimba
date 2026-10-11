@@ -1,7 +1,21 @@
+import { FilterToolbar } from "../components/filters/filter-toolbar";
+import { FilterSelect } from "../components/filters/filter-select";
+import { FilterDate } from "../components/filters/filter-date";
+import { matchesDateFilter, type DateFilter } from "../components/filters/date-filter-utils";
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
-import { useApp, DOMAINS, LOCATIONS, getSublocations, DOMAIN_PRAMUKH_DETAILS, AUDIT_AREAS, type AuditPlan } from "../context/app-context";
+import { useApp, type AuditPlan } from "../context/app-context";
 import { useEffect } from "react";
+
+import {
+  getPrakalpas,
+  type Prakalpa,
+} from "../services/prakalpaService";
+
+import {
+  getLocations,
+  type Location,
+} from "../services/locationService";
 
 import {
   getAuditPlans,
@@ -12,8 +26,8 @@ import {
 } from "../services/auditPlanService";
 
 function downloadCSV(plans: AuditPlan[]) {
-  const headers = ["Audit ID", "Domain", "Location", "Sublocation", "Audit Planned Date", "Audit Coordinator", "Audit Areas", "Prakalpa Pramukh", "Auditors", "Purpose", "Status", "Created Date"];
-  const rows = plans.map(p => [p.iqaNumber, p.domain, p.location, p.sublocation || "", p.auditPlannedDate, p.auditCoordinator, (p.auditAreas || []).join("; "), p.prakalphaPramukh, (p.auditors || []).join("; "), `"${(p.purpose || "").replace(/"/g, '""')}"`, p.status, p.createdDate].join(","));
+  const headers = ["Audit ID", "Prakalpa", "Location", "Sublocation", "Audit Planned Date", "Audit Coordinator", "Audit Areas", "Prakalpa Pramukh", "Auditors", "Purpose", "Status", "Created Date"];
+  const rows = plans.map(p => [p.iqaNumber, p.prakalpa, p.location, p.sublocation || "", p.auditPlannedDate, p.auditCoordinator, (p.auditAreas || []).join("; "), p.prakalphaPramukh, (p.auditors || []).join("; "), `"${(p.purpose || "").replace(/"/g, '""')}"`, p.status, p.createdDate].join(","));
   const csv = [headers.join(","), ...rows].join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
@@ -24,10 +38,25 @@ function downloadCSV(plans: AuditPlan[]) {
 interface ScheduleModalProps {
   plan: AuditPlan;
   onClose: () => void;
-  onSchedule: (data: { startDate: string; endDate: string; auditors: string[]; finalAuditor: string }) => void;
+  onSchedule: (data: {
+    startDate: string;
+    endDate: string;
+    auditors: string[];
+    leadAuditor: string;
+    auditCoordinator: string;
+  }) => void;
   auditors: string[];
+  leadAuditors: string[];
+  auditorDirectoryError: string | null;
 }
-function ScheduleModal({ plan, onClose, onSchedule, auditors }: ScheduleModalProps) {
+function ScheduleModal({
+  plan,
+  onClose,
+  onSchedule,
+  auditors,
+  leadAuditors,
+  auditorDirectoryError,
+}: ScheduleModalProps) {
   const [startDate, setStartDate] = useState(
     plan.auditPlannedDate
       ? new Date(plan.auditPlannedDate).toISOString().split("T")[0]
@@ -39,10 +68,14 @@ function ScheduleModal({ plan, onClose, onSchedule, auditors }: ScheduleModalPro
       : ""
   );
   const [selectedAuditors, setSelectedAuditors] = useState<string[]>(plan.auditors || []);
-  const [finalAuditor, setFinalAuditor] = useState(plan.auditors?.[0] || auditors[0]);
+  const [leadAuditor, setLeadAuditor] = useState("");
 
-  const toggleAuditor = (a: string) =>
-    setSelectedAuditors((prev) => prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]);
+  const toggleAuditor = (a: string) => {
+    setSelectedAuditors((prev) =>
+      prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]
+    );
+    if (leadAuditor === a) setLeadAuditor("");
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -51,18 +84,24 @@ function ScheduleModal({ plan, onClose, onSchedule, auditors }: ScheduleModalPro
         <div className="p-6 border-b border-outline-variant/10">
           <h3 className="font-headline-sm">Schedule Audit</h3>
           <p className="font-data-mono text-[11px] text-primary mt-1">{plan.iqaNumber}</p>
-          <p className="font-body-md text-on-surface-variant mt-0.5">{plan.domain} — {plan.location}{plan.sublocation ? `, ${plan.sublocation}` : ""}</p>
+          <p className="font-body-md text-on-surface-variant mt-0.5">{plan.prakalpa} — {plan.location}{plan.sublocation ? `, ${plan.sublocation}` : ""}</p>
         </div>
         <div className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">Start Date</label>
               <input
                 type="date"
                 value={startDate}
-                readOnly
-                disabled
-                className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-surface-container-low text-on-surface-variant cursor-not-allowed"
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setStartDate(value);
+
+                  if (!endDate || value > endDate) {
+                    setEndDate(value);
+                  }
+                }}
+                className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
               />
             </div>
             <div>
@@ -71,10 +110,29 @@ function ScheduleModal({ plan, onClose, onSchedule, auditors }: ScheduleModalPro
             </div>
           </div>
           <div>
+            <label className="font-label-md text-on-surface-variant block mb-1">
+              Audit Coordinator
+            </label>
+
+            <div className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md bg-surface-container-lowest text-on-surface-variant">
+              {plan.auditCoordinator || "—"}
+            </div>
+
+            <p className="text-[11px] text-on-surface-variant/60 mt-1">
+              Coordinator selected during Audit Planning
+            </p>
+          </div>
+
+          <div>
             <label className="font-label-md text-on-surface-variant block mb-2">Auditors</label>
+            {auditorDirectoryError && (
+              <p role="alert" className="text-sm text-red-600 mb-2">
+                {auditorDirectoryError}
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
-              {auditors.map((a) => (
-                <button key={a} type="button" onClick={() => toggleAuditor(a)}
+              {auditors.map((a, idx) => (
+                <button key={`${a}-${idx}`} type="button" onClick={() => toggleAuditor(a)}
                   className={`px-3 py-1.5 rounded-lg text-[12px] font-medium border-2 transition-all ${selectedAuditors.includes(a) ? "bg-primary text-on-primary border-primary" : "bg-white text-on-surface-variant border-outline-variant hover:border-primary/50"}`}>
                   {a}
                 </button>
@@ -82,15 +140,31 @@ function ScheduleModal({ plan, onClose, onSchedule, auditors }: ScheduleModalPro
             </div>
           </div>
           <div>
-            <label className="font-label-md text-on-surface-variant block mb-1">Lead / Final Auditor</label>
-            <select value={finalAuditor} onChange={(e) => setFinalAuditor(e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
-              {(selectedAuditors.length > 0 ? selectedAuditors : auditors).map((a) => <option key={a}>{a}</option>)}
+            <label className="font-label-md text-on-surface-variant block mb-1">Lead Auditor</label>
+            <select value={leadAuditor} onChange={(e) => setLeadAuditor(e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
+              <option value="">Select Lead Auditor</option>
+              {selectedAuditors.filter((name) => leadAuditors.includes(name)).map((name) => (
+                <option
+                  key={name}
+                  value={name}
+                >
+                  {name}
+                </option>
+              ))}
             </select>
           </div>
         </div>
         <div className="p-6 pt-0 flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 border border-outline-variant rounded-lg font-label-md hover:bg-surface-container-low">Cancel</button>
-          <button disabled={!startDate || !endDate || selectedAuditors.length === 0} onClick={() => onSchedule({ startDate, endDate, auditors: selectedAuditors, finalAuditor })} className="flex-1 py-3 bg-primary text-on-primary rounded-lg font-label-md font-bold hover:brightness-110 disabled:opacity-40">Schedule Audit</button>
+          <button disabled={!!auditorDirectoryError || !startDate || !endDate || selectedAuditors.length === 0 || !leadAuditor || !selectedAuditors.every((name) => auditors.includes(name)) || !auditors.includes(leadAuditor)} onClick={() =>
+            onSchedule({
+              startDate,
+              endDate,
+              auditors: selectedAuditors,
+              leadAuditor,
+              auditCoordinator: plan.auditCoordinator,
+            })
+          } className="flex-1 py-3 bg-primary text-on-primary rounded-lg font-label-md font-bold hover:brightness-110 disabled:opacity-40">Schedule Audit</button>
         </div>
       </div>
     </div>
@@ -101,49 +175,110 @@ interface EditModalProps {
   plan: AuditPlan | null;
   onClose: () => void;
   onSave: (data: Omit<AuditPlan, "id" | "iqaNumber" | "createdDate">) => void;
-  auditors: string[];
   coordinators: string[];
-  onAddAuditor: (name: string) => void;
+  prakalpas: Prakalpa[];
+  masterLocations: Location[];
 }
-function EditModal({ plan, onClose, onSave, auditors, coordinators, onAddAuditor }: EditModalProps) {
-  const [selectedAreas, setSelectedAreas] = useState<string[]>(plan?.auditAreas || []);
-  const [selectedAuditors, setSelectedAuditors] = useState<string[]>(plan?.auditors || []);
-  const [newAuditorName, setNewAuditorName] = useState("");
-  const [showNewAuditor, setShowNewAuditor] = useState(false);
+
+function EditModal({
+  plan,
+  onClose,
+  onSave,
+  coordinators,
+  prakalpas,
+  masterLocations,
+}: EditModalProps) {
+  const firstPrakalpa =
+    plan?.prakalpa ||
+    prakalpas.find((p) => p.active !== false)?.name ||
+    "";
+
+  const [selectedAreas, setSelectedAreas] = useState<string[]>(
+    (plan?.auditAreas || []).filter((area) => prakalpas.find((p) => p.name === firstPrakalpa)?.auditAreas?.includes(area))
+  );
+
   const [form, setForm] = useState({
-    domain: plan?.domain || DOMAINS[0],
+    prakalpa: firstPrakalpa,
     location: plan?.location || "",
     sublocation: plan?.sublocation || "",
     auditPlannedDate: plan?.auditPlannedDate || "",
     auditCoordinator: plan?.auditCoordinator || coordinators[0] || "",
-    prakalphaPramukh: plan?.prakalphaPramukh || DOMAIN_PRAMUKH_DETAILS[plan?.domain || DOMAINS[0]]?.pramukh || "",
+    prakalphaPramukh:
+      plan?.prakalphaPramukh ||
+      prakalpas.find((p) => p.name === firstPrakalpa)?.prakalpaPramukh ||
+      "",
     purpose: plan?.purpose || "",
     status: plan?.status || "pending" as const,
   });
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  const handleDomainChange = (d: string) => {
-    const details = DOMAIN_PRAMUKH_DETAILS[d];
-    setForm((f) => ({ ...f, domain: d, location: "", sublocation: "", prakalphaPramukh: details?.pramukh || "" }));
+  const activePrakalpas = useMemo(
+    () => prakalpas.filter((p) => p.active !== false),
+    [prakalpas]
+  );
+
+  const selectedPrakalpa = useMemo(
+    () => prakalpas.find((p) => p.name === form.prakalpa),
+    [prakalpas, form.prakalpa]
+  );
+
+  const availableAuditAreas =
+    selectedPrakalpa?.auditAreas || [];
+
+  const locations = useMemo(
+    () =>
+      masterLocations.filter(
+        (location) =>
+          location.active !== false &&
+          location.prakalpa === form.prakalpa
+      ),
+    [masterLocations, form.prakalpa]
+  );
+
+  const selectedLocation = useMemo(
+    () =>
+      locations.find(
+        (location) =>
+          location.name === form.location
+      ),
+    [locations, form.location]
+  );
+
+  const sublocations =
+    selectedLocation?.sublocations || [];
+
+  const handlePrakalpaChange = (name: string) => {
+    const prakalpa = prakalpas.find((p) => p.name === name);
+
+    setForm((f) => ({
+      ...f,
+      prakalpa: name,
+      location: "",
+      sublocation: "",
+      prakalphaPramukh: prakalpa?.prakalpaPramukh || "",
+    }));
+
+    // Audit areas are specific to each Prakalpa.
+    // Reset them whenever the Prakalpa changes.
+    setSelectedAreas([]);
   };
 
-  const locations = LOCATIONS[form.domain] || [];
-  const sublocations = getSublocations(form.domain, form.location);
-
-  const toggleArea = (a: string) => setSelectedAreas((p) => p.includes(a) ? p.filter((x) => x !== a) : [...p, a]);
-  const toggleAuditor = (a: string) => setSelectedAuditors((p) => p.includes(a) ? p.filter((x) => x !== a) : [...p, a]);
-
-  const handleAddAuditor = () => {
-    const name = newAuditorName.trim();
-    if (!name) return;
-    onAddAuditor(name);
-    setSelectedAuditors((p) => [...p, name]);
-    setNewAuditorName("");
-    setShowNewAuditor(false);
-  };
-
+  const toggleArea = (a: string) =>
+    setSelectedAreas((p) =>
+      p.includes(a)
+        ? p.filter((x) => x !== a)
+        : [...p, a]
+    );
   const handleSave = () => {
-    onSave({ ...form, auditAreas: selectedAreas, auditors: selectedAuditors, prakalpa: `${form.domain} — ${form.location}${form.sublocation ? `, ${form.sublocation}` : ""}` });
+    onSave({
+      ...form,
+      auditAreas: selectedAreas,
+
+      // Auditors are assigned only during scheduling.
+      auditors: [],
+
+      prakalpa: form.prakalpa,
+    });
   };
 
   return (
@@ -155,55 +290,99 @@ function EditModal({ plan, onClose, onSave, auditors, coordinators, onAddAuditor
           {plan ? <p className="font-data-mono text-[11px] text-primary mt-1">{plan.iqaNumber}</p> : <p className="font-label-md text-on-surface-variant/50 mt-0.5">Audit ID auto-generated</p>}
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
-          {/* Domain */}
+          {/* Prakalpa */}
           <div>
-            <label className="font-label-md text-on-surface-variant block mb-1">Domain Type <span className="text-error">*</span></label>
-            <select value={form.domain} onChange={(e) => handleDomainChange(e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
-              {DOMAINS.map((d) => <option key={d}>{d}</option>)}
+            <label className="font-label-md text-on-surface-variant block mb-1">Prakalpa Type <span className="text-error">*</span></label>
+            <select value={form.prakalpa} onChange={(e) => handlePrakalpaChange(e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
+              <option value="">— Select Prakalpa —</option>
+              {activePrakalpas.map((p) => (
+                <option key={p._id || p.id || p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
             </select>
           </div>
 
           {/* Location & Sublocation */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="font-label-md text-on-surface-variant block mb-1">Location <span className="text-error">*</span></label>
-              <select value={form.location} onChange={(e) => { set("location", e.target.value); set("sublocation", ""); }} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" disabled={locations.length === 0}>
+              <label className="font-label-md text-on-surface-variant block mb-1">
+                Location
+                {locations.length > 0 && (
+                  <span className="text-error"> *</span>
+                )}
+              </label>
+              {locations.length === 0 ? (
+                <div className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md bg-surface-container-lowest text-on-surface-variant/60">
+                  No location configured
+                </div>
+              ) : (
+                <select
+                  value={form.location}
+                  onChange={(e) => {
+                    set("location", e.target.value);
+                    set("sublocation", "");
+                  }}
+                  className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                >
                 <option value="">— Select —</option>
-                {locations.map((l) => <option key={l}>{l}</option>)}
-              </select>
+                {locations.map((l) => (
+                  <option key={l._id || l.id || l.name} value={l.name}>
+                    {l.name}
+                  </option>
+                ))}
+                </select>
+              )}
             </div>
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">Sublocation</label>
-              {sublocations.length === 1 ? (
-                <div className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md bg-surface-container-lowest text-on-surface-variant">
-                  {sublocations[0]}
+              {sublocations.length === 0 ? (
+                <div className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md bg-surface-container-lowest text-on-surface-variant/60">
+                  No sublocation
                 </div>
               ) : (
-                <select value={form.sublocation} onChange={(e) => set("sublocation", e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" disabled={sublocations.length === 0}>
-                  <option value="">— Select —</option>
-                  {sublocations.map((s) => <option key={s}>{s}</option>)}
+                <select
+                  value={form.sublocation}
+                  onChange={(e) => set("sublocation", e.target.value)}
+                  className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                >
+                  <option value="">— Select Sublocation —</option>
+                  {sublocations.map((sub) => (
+                    <option key={sub} value={sub}>
+                      {sub}
+                    </option>
+                  ))}
                 </select>
               )}
             </div>
           </div>
 
-          {/* Pramukh (name only, no email) */}
+          {/* Prakalpa Pramukh — automatically derived from Prakalpa master data */}
           <div>
-            <label className="font-label-md text-on-surface-variant block mb-1">Prakalpa Pramukh <span className="text-error">*</span></label>
-            <input type="text" value={form.prakalphaPramukh} onChange={(e) => set("prakalphaPramukh", e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+            <label className="font-label-md text-on-surface-variant block mb-1">
+              Prakalpa Pramukh <span className="text-error">*</span>
+            </label>
+
+            <div className="w-full border border-outline-variant/40 rounded-lg p-3 font-body-md bg-surface-container-lowest text-on-surface">
+              {form.prakalphaPramukh || "— Select a Prakalpa —"}
+            </div>
+
+            <p className="text-[11px] text-on-surface-variant/60 mt-1">
+              Automatically assigned from Prakalpa Management
+            </p>
           </div>
 
           {/* Audit Planning */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">Audit Planned Date <span className="text-error">*</span></label>
-              <input type="date" value={form.auditPlannedDate} onChange={(e) => set("auditPlannedDate", e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+              <input type="date" value={(form.auditPlannedDate || "").split("T")[0]} onChange={(e) => set("auditPlannedDate", e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
             </div>
             <div>
               <label className="font-label-md text-on-surface-variant block mb-1">Audit Coordinator <span className="text-error">*</span></label>
               <select value={form.auditCoordinator} onChange={(e) => set("auditCoordinator", e.target.value)} className="w-full border border-outline-variant rounded-lg p-3 font-body-md bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
                 <option value="">— Select Coordinator —</option>
-                {coordinators.map((c) => <option key={c}>{c}</option>)}
+                {coordinators.map((c, idx) => <option key={`${c}-${idx}`}>{c}</option>)}
               </select>
             </div>
           </div>
@@ -212,40 +391,23 @@ function EditModal({ plan, onClose, onSave, auditors, coordinators, onAddAuditor
           <div>
             <label className="font-label-md text-on-surface-variant block mb-2">Audit Areas <span className="text-error">*</span></label>
             <div className="flex flex-wrap gap-2">
-              {AUDIT_AREAS.map((area) => (
+              {availableAuditAreas.map((area) => (
                 <button key={area} type="button" onClick={() => toggleArea(area)}
                   className={`px-3 py-1.5 rounded-lg text-[12px] font-medium border-2 transition-all ${selectedAreas.includes(area) ? "bg-primary text-on-primary border-primary" : "bg-white text-on-surface-variant border-outline-variant hover:border-primary/50"}`}>
                   {area}
                 </button>
               ))}
             </div>
-            {selectedAreas.length === 0 && <p className="text-[11px] text-error mt-1">Select at least one audit area</p>}
-          </div>
-
-          {/* Auditors */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="font-label-md text-on-surface-variant">Auditors <span className="text-error">*</span></label>
-              <button type="button" onClick={() => setShowNewAuditor((v) => !v)} className="text-[11px] text-primary font-label-md font-bold flex items-center gap-1 hover:underline">
-                <span className="material-symbols-outlined text-[14px]">person_add</span>
-                + New Auditor
-              </button>
-            </div>
-            {showNewAuditor && (
-              <div className="flex gap-2 mb-3">
-                <input type="text" placeholder="Enter auditor name" value={newAuditorName} onChange={(e) => setNewAuditorName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddAuditor()} className="flex-1 border border-primary rounded-lg p-2.5 font-body-md focus:ring-2 focus:ring-primary/20 outline-none" autoFocus />
-                <button type="button" onClick={handleAddAuditor} className="px-4 py-2.5 bg-primary text-on-primary rounded-lg font-label-md font-bold">Add</button>
-              </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {auditors.map((a) => (
-                <button key={a} type="button" onClick={() => toggleAuditor(a)}
-                  className={`px-3 py-1.5 rounded-lg text-[12px] font-medium border-2 transition-all ${selectedAuditors.includes(a) ? "bg-secondary text-on-secondary border-secondary" : "bg-white text-on-surface-variant border-outline-variant hover:border-secondary/50"}`}>
-                  {a}
-                </button>
-              ))}
-            </div>
-            {selectedAuditors.length === 0 && <p className="text-[11px] text-error mt-1">Select at least one auditor</p>}
+            {availableAuditAreas.length === 0 ? (
+              <p className="text-[11px] text-amber-700 mt-2">
+                No audit areas are configured for this Prakalpa.
+                Configure them from Prakalpa Management.
+              </p>
+            ) : selectedAreas.length === 0 ? (
+              <p className="text-[11px] text-error mt-1">
+                Select at least one audit area
+              </p>
+            ) : null}
           </div>
 
           {/* Purpose (optional) */}
@@ -257,7 +419,14 @@ function EditModal({ plan, onClose, onSave, auditors, coordinators, onAddAuditor
         <div className="p-6 pt-0 flex gap-3 border-t border-outline-variant/10 mt-2 shrink-0">
           <button onClick={onClose} className="flex-1 py-3 border border-outline-variant rounded-lg font-label-md hover:bg-surface-container-low">Cancel</button>
           <button
-            disabled={!form.auditPlannedDate || !form.location || selectedAreas.length === 0 || selectedAuditors.length === 0}
+            disabled={
+              !form.prakalpa ||
+              !form.auditPlannedDate ||
+              (locations.length > 0 && !form.location) ||
+              !form.auditCoordinator ||
+              !form.prakalphaPramukh ||
+              selectedAreas.length === 0
+            }
             onClick={handleSave}
             className="flex-1 py-3 bg-primary text-on-primary rounded-lg font-label-md font-bold hover:brightness-110 disabled:opacity-40"
           >
@@ -273,13 +442,36 @@ export default function AuditPlanPage() {
   const {
     currentUser,
     auditors,
+    auditorDirectoryError,
     coordinatorUsers,
-    addAuditor,
+    refreshLiveData
   } = useApp();
   const [auditPlans, setAuditPlans] = useState<AuditPlan[]>([]);
+  const [prakalpas, setPrakalpas] = useState<Prakalpa[]>([]);
+  const [masterLocations, setMasterLocations] = useState<Location[]>([]);
+
   useEffect(() => {
     loadAuditPlans();
+    loadMasterData();
   }, []);
+
+  async function loadMasterData() {
+    try {
+      const [prakalpaData, locationData] =
+        await Promise.all([
+          getPrakalpas(),
+          getLocations(),
+        ]);
+
+      setPrakalpas(prakalpaData);
+      setMasterLocations(locationData);
+    } catch (err) {
+      console.error(
+        "Failed to load Audit Plan master data:",
+        err
+      );
+    }
+  }
 
   async function loadAuditPlans() {
     try {
@@ -297,29 +489,95 @@ export default function AuditPlanPage() {
   const [editTarget, setEditTarget] = useState<AuditPlan | null | "new">(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [filterDomain, setFilterDomain] = useState("All");
+  const [filterPrakalpa, setFilterPrakalpa] = useState("All");
   const [filterLocation, setFilterLocation] = useState("All");
   const [filterCoordinator, setFilterCoordinator] = useState("All");
+  const [filterSublocation, setFilterSublocation] = useState("All");
+  const [filterAuditArea, setFilterAuditArea] = useState("All");
+  const [filterPramukh, setFilterPramukh] = useState("All");
+  const [filterAuditor, setFilterAuditor] = useState("All");
+  const [filterDate, setFilterDate] = useState<DateFilter>({ mode: "all", start: "", end: "" });
   const [filterStatus, setFilterStatus] = useState("All");
 
-  const isLead = currentUser.role === "lead_auditor";
+  const [showAllPlans, setShowAllPlans] =
+    useState(false);
+
+  const canManageAuditPlans = currentUser.role === "admin" || currentUser.role === "super_admin";
+  const canManageScheduling = currentUser.role === "admin" || currentUser.role === "super_admin" || currentUser.role === "audit_coordinator";
+  const canSeeAuditPlanActions = canManageAuditPlans || canManageScheduling;
 
   const allLocations = useMemo(() => [...new Set(auditPlans.map((p) => p.location).filter(Boolean))], [auditPlans]);
 
-  const filtered = useMemo(() => auditPlans.filter((p) => {
-    const q = search.toLowerCase();
-    const ms = !q || p.iqaNumber.toLowerCase().includes(q) || p.domain.toLowerCase().includes(q) || p.location.toLowerCase().includes(q) || (p.purpose || "").toLowerCase().includes(q);
-    return ms && (filterDomain === "All" || p.domain === filterDomain) && (filterLocation === "All" || p.location === filterLocation) && (filterCoordinator === "All" || p.auditCoordinator === filterCoordinator) && (filterStatus === "All" || p.status === filterStatus);
-  }), [auditPlans, search, filterDomain, filterLocation, filterCoordinator, filterStatus]);
+  const filtered = useMemo(() => {
+    return auditPlans
+      .filter((p) => {
+        const q = search.toLowerCase();
+
+        const ms =
+          !q ||
+          p.iqaNumber.toLowerCase().includes(q) ||
+          p.prakalpa.toLowerCase().includes(q) ||
+          p.location.toLowerCase().includes(q) ||
+          (p.purpose || "").toLowerCase().includes(q);
+
+        // Keep all existing filters unchanged.
+        const matchesExistingFilters =
+          ms &&
+          (filterPrakalpa === "All" ||
+            p.prakalpa === filterPrakalpa) &&
+          (filterLocation === "All" ||
+            p.location === filterLocation) &&
+          (filterCoordinator === "All" ||
+            p.auditCoordinator === filterCoordinator) &&
+          (filterStatus === "All" || p.status === filterStatus) &&
+          (filterSublocation === "All" || p.sublocation === filterSublocation) &&
+          (filterAuditArea === "All" || (p.auditAreas || []).includes(filterAuditArea)) &&
+          (filterPramukh === "All" || p.prakalphaPramukh === filterPramukh) &&
+          (filterAuditor === "All" || (p.auditors || []).includes(filterAuditor)) &&
+          matchesDateFilter(p.auditPlannedDate, undefined, filterDate);
+
+        // Default view = active Audit Plans only.
+        // Show All = include completed/older records too.
+        const matchesView =
+          showAllPlans
+            ? ["pending", "scheduled", "completed"].includes(p.status)
+            : p.status === "pending";
+
+        return matchesExistingFilters && matchesView;
+      })
+      .sort((a, b) =>
+        a.iqaNumber.localeCompare(
+          b.iqaNumber,
+          undefined,
+          {
+            numeric: true,
+            sensitivity: "base",
+          }
+        )
+      );
+  }, [
+    auditPlans,
+    search,
+    filterPrakalpa,
+    filterLocation,
+    filterCoordinator,
+    filterStatus,
+    filterSublocation,
+    filterAuditArea,
+    filterPramukh,
+    filterAuditor,
+    filterDate,
+    showAllPlans,
+  ]);
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6 min-w-0">
       <div className="flex flex-wrap justify-between items-start gap-4">
         <div>
           <h2 className="font-headline-md text-on-surface">Audit Plan</h2>
           <p className="font-body-md text-on-surface-variant mt-0.5">{auditPlans.length} plans</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3 w-full sm:w-auto">
           <Link href="/audit-calendar" className="flex items-center gap-2 px-4 py-2.5 border border-outline-variant rounded-lg font-label-md font-medium hover:bg-surface-container-low transition-colors">
             <span className="material-symbols-outlined text-[18px]">calendar_month</span>
             Calendar View
@@ -328,7 +586,7 @@ export default function AuditPlanPage() {
             <span className="material-symbols-outlined text-[18px]">download</span>
             Download
           </button>
-          {isLead && (
+          {canManageAuditPlans && (
             <button onClick={() => setEditTarget("new")} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-on-primary rounded-lg font-label-md font-bold shadow-sm hover:brightness-110">
               <span className="material-symbols-outlined text-[18px]">add</span>
               New Audit Plan
@@ -338,31 +596,47 @@ export default function AuditPlanPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-outline-variant/20 shadow-soft flex flex-wrap gap-3 items-center">
-        <div className="relative flex-1 min-w-[200px]">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[18px]">search</span>
-          <input type="text" placeholder="Search Audit ID, Domain, Location..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full pl-9 pr-4 py-2 border border-outline-variant/40 rounded-lg font-body-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-surface-container-lowest" />
-        </div>
-        <select value={filterDomain} onChange={(e) => setFilterDomain(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Domains</option>
-          {DOMAINS.map((d) => <option key={d}>{d}</option>)}
-        </select>
-        <select value={filterLocation} onChange={(e) => setFilterLocation(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Locations</option>
-          {allLocations.map((l) => <option key={l}>{l}</option>)}
-        </select>
-        <select value={filterCoordinator} onChange={(e) => setFilterCoordinator(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Coordinators</option>
-          {coordinatorNames.map((c) => <option key={c}>{c}</option>)}
-        </select>
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="border border-outline-variant/40 rounded-lg py-2 px-3 font-body-md bg-white outline-none">
-          <option value="All">All Status</option>
-          <option value="pending">Pending</option>
-          <option value="scheduled">Scheduled</option>
-        </select>
-        {(search || filterDomain !== "All" || filterLocation !== "All" || filterCoordinator !== "All" || filterStatus !== "All") && (
-          <button onClick={() => { setSearch(""); setFilterDomain("All"); setFilterLocation("All"); setFilterCoordinator("All"); setFilterStatus("All"); }} className="font-label-md text-on-surface-variant/60 hover:text-primary">Clear</button>
-        )}
+      <FilterToolbar search={{ value: search, onChange: setSearch, placeholder: "Search Audit ID, Prakalpa, Location..." }}
+          filters={[
+            ...(search ? [{ key: "search", label: "Search", value: search, onRemove: () => setSearch("") }] : []),
+            ...(filterPrakalpa !== "All" ? [{ key: "filterPrakalpa", label: "Prakalpa", value: filterPrakalpa, onRemove: () => setFilterPrakalpa("All") }] : []),
+            ...(filterLocation !== "All" ? [{ key: "filterLocation", label: "Location", value: filterLocation, onRemove: () => setFilterLocation("All") }] : []),
+            ...(filterCoordinator !== "All" ? [{ key: "filterCoordinator", label: "Coordinator", value: filterCoordinator, onRemove: () => setFilterCoordinator("All") }] : []),
+            ...(filterStatus !== "All" ? [{ key: "filterStatus", label: "Status", value: filterStatus, onRemove: () => setFilterStatus("All") }] : []),
+            ...(filterSublocation !== "All" ? [{ key: "sublocation", label: "Sublocation", value: filterSublocation, onRemove: () => setFilterSublocation("All") }] : []),
+            ...(filterAuditArea !== "All" ? [{ key: "auditArea", label: "Audit Area", value: filterAuditArea, onRemove: () => setFilterAuditArea("All") }] : []),
+            ...(filterPramukh !== "All" ? [{ key: "pramukh", label: "Pramukh", value: filterPramukh, onRemove: () => setFilterPramukh("All") }] : []),
+            ...(filterAuditor !== "All" ? [{ key: "auditor", label: "Auditor", value: filterAuditor, onRemove: () => setFilterAuditor("All") }] : []),
+            ...(filterDate.mode !== "all" && filterDate.start ? [{ key: "date", label: "Planned Date", value: filterDate.mode === "range" ? `${filterDate.start} to ${filterDate.end || "…"}` : `${filterDate.mode}: ${filterDate.start}`, onRemove: () => setFilterDate({ mode: "all", start: "", end: "" }) }] : [])
+          ]}
+          onClearAll={() => { setSearch(""); setFilterPrakalpa("All"); setFilterLocation("All"); setFilterCoordinator("All"); setFilterStatus("All"); setFilterSublocation("All"); setFilterAuditArea("All"); setFilterPramukh("All"); setFilterAuditor("All"); setFilterDate({ mode: "all", start: "", end: "" }); }} resultCount={filtered.length} resultLabel="plans shown">
+          <FilterSelect label="Prakalpa" value={filterPrakalpa} onChange={setFilterPrakalpa} options={prakalpas.filter(p => p.active !== false).map(p => ({ value: p.name, label: p.name }))} searchable allLabel="All Prakalpas" />
+          <FilterSelect label="Location" value={filterLocation} onChange={setFilterLocation} options={allLocations.map(value => ({ value, label: value }))} searchable allLabel="All Locations" />
+          <FilterSelect label="Coordinator" value={filterCoordinator} onChange={setFilterCoordinator} options={coordinatorNames.map(value => ({ value, label: value }))} searchable allLabel="All Coordinators" />
+          <FilterSelect label="Status" value={filterStatus} onChange={setFilterStatus} options={[{ value: "pending", label: "Pending" }, { value: "scheduled", label: "Scheduled" }, { value: "completed", label: "Completed" }]} allLabel="All Statuses" />
+          <FilterSelect label="Sublocation" value={filterSublocation} onChange={setFilterSublocation} options={[...new Set(auditPlans.map(p => p.sublocation).filter((value): value is string => typeof value === "string" && value.length > 0))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Audit Area" value={filterAuditArea} onChange={setFilterAuditArea} options={[...new Set(auditPlans.flatMap(p => p.auditAreas || []))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Pramukh" value={filterPramukh} onChange={setFilterPramukh} options={[...new Set(auditPlans.map(p => p.prakalphaPramukh).filter((value): value is string => typeof value === "string" && value.length > 0))].map(value => ({ value, label: value }))} searchable />
+          <FilterSelect label="Auditor" value={filterAuditor} onChange={setFilterAuditor} options={[...new Set(auditPlans.flatMap(p => p.auditors || []))].map(value => ({ value, label: value }))} searchable />
+          <FilterDate label="Planned Date" value={filterDate} onChange={setFilterDate} />
+        </FilterToolbar>
+
+      {/* Audit plan visibility */}
+      <div className="flex items-center justify-start -mt-2">
+        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showAllPlans}
+            onChange={(e) =>
+              setShowAllPlans(e.target.checked)
+            }
+            className="w-4 h-4 accent-primary cursor-pointer"
+          />
+
+          <span className="font-label-md text-on-surface-variant">
+            Show all audit plans
+          </span>
+        </label>
       </div>
 
       {/* Table */}
@@ -370,31 +644,31 @@ export default function AuditPlanPage() {
         <div className="bg-white rounded-xl border border-outline-variant/10 shadow-soft p-16 flex flex-col items-center justify-center gap-4">
           <span className="material-symbols-outlined text-[48px] text-on-surface-variant/20">event_note</span>
           <p className="font-headline-sm text-on-surface-variant/40">No audit plans found</p>
-          {isLead && <button onClick={() => setEditTarget("new")} className="px-6 py-2.5 bg-primary text-on-primary rounded-lg font-label-md font-bold">Create First Plan</button>}
+          {canManageAuditPlans && <button onClick={() => setEditTarget("new")} className="px-6 py-2.5 bg-primary text-on-primary rounded-lg font-label-md font-bold">Create First Plan</button>}
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow-soft border border-outline-variant/10 overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
+            <table className="w-full min-w-[1180px] text-left">
               <thead className="bg-surface-container-lowest border-b border-outline-variant/20">
                 <tr>
-                  {["Audit ID", "Domain", "Location", "Sublocation", "Audit Areas", "Planned Date", "Coordinator", "Pramukh", "Auditors", "Status", ...(isLead ? ["Actions"] : [])].map((h) => (
+                  {["Audit ID", "Prakalpa", "Location", "Sublocation", "Audit Areas", "Planned Date", "Coordinator", "Pramukh", "Auditors", "Status", ...(canSeeAuditPlanActions ? ["Actions"] : [])].map((h) => (
                     <th key={h} className="px-4 py-3 font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant/10">
                 {filtered.map((plan, idx) => (
-                  <tr key={plan.id} className={`hover:bg-surface-container-low transition-colors ${idx % 2 === 1 ? "bg-surface-container-lowest/50" : ""}`}>
+                  <tr key={plan.id || plan._id || `plan-${idx}`} className={`hover:bg-surface-container-low transition-colors ${idx % 2 === 1 ? "bg-surface-container-lowest/50" : ""}`}>
                     <td className="px-4 py-3 font-data-mono text-[12px] text-primary font-bold whitespace-nowrap">{plan.iqaNumber}</td>
                     <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full text-[11px] font-bold">{plan.domain}</span>
+                      <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full text-[11px] font-bold">{plan.prakalpa}</span>
                     </td>
                     <td className="px-4 py-3 font-body-md font-medium text-on-surface">{plan.location}</td>
                     <td className="px-4 py-3 font-body-md text-on-surface-variant">{plan.sublocation || "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
-                        {(plan.auditAreas || []).slice(0, 2).map((a) => <span key={a} className="px-1.5 py-0.5 bg-secondary/10 text-secondary rounded text-[10px] font-medium whitespace-nowrap">{a}</span>)}
+                        {(plan.auditAreas || []).slice(0, 2).map((a) => <span key={`${a}-${idx}`} className="px-1.5 py-0.5 bg-secondary/10 text-secondary rounded text-[10px] font-medium whitespace-nowrap">{a}</span>)}
                         {(plan.auditAreas || []).length > 2 && <span className="px-1.5 py-0.5 bg-surface-container text-on-surface-variant rounded text-[10px]">+{(plan.auditAreas || []).length - 2}</span>}
                       </div>
                     </td>
@@ -403,19 +677,75 @@ export default function AuditPlanPage() {
                     <td className="px-4 py-3 font-body-md text-on-surface-variant whitespace-nowrap">{plan.prakalphaPramukh}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
-                        {(plan.auditors || []).slice(0, 2).map((a) => <span key={a} className="px-1.5 py-0.5 bg-surface-container rounded text-[10px] whitespace-nowrap">{a}</span>)}
+                        {(plan.auditors || []).slice(0, 2).map((a) => <span key={`${a}-${idx}`} className="px-1.5 py-0.5 bg-surface-container rounded text-[10px] whitespace-nowrap">{a}</span>)}
                         {(plan.auditors || []).length > 2 && <span className="text-[10px] text-on-surface-variant">+{(plan.auditors || []).length - 2}</span>}
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase ${plan.status === "pending" ? "bg-primary/10 text-primary" : "bg-secondary/10 text-secondary"}`}>{plan.status}</span>
                     </td>
-                    {isLead && (
+                    {canSeeAuditPlanActions && (
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <button onClick={() => setScheduleTarget(plan)} title="Schedule" className="p-1.5 rounded-lg hover:bg-primary/10 text-primary"><span className="material-symbols-outlined text-[18px]">event</span></button>
-                          <button onClick={() => setEditTarget(plan)} title="Edit" className="p-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                          <button onClick={() => setDeleteConfirm(plan.id)} title="Delete" className="p-1.5 rounded-lg hover:bg-error/10 text-error"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+
+                          {plan.status === "pending" && (
+                            <>
+                                {canManageScheduling && (
+                              <button
+                                onClick={() =>
+                                  setScheduleTarget(
+                                    plan
+                                  )
+                                }
+                                title="Schedule"
+                                className="p-1.5 rounded-lg hover:bg-primary/10 text-primary"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">
+                                  event
+                                </span>
+                              </button>
+                                )}
+
+                                {canManageAuditPlans && (<>
+                              <button
+                                onClick={() =>
+                                  setEditTarget(
+                                    plan
+                                  )
+                                }
+                                title="Edit"
+                                className="p-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">
+                                  edit
+                                </span>
+                              </button>
+
+                              <button
+                                onClick={() =>
+                                  setDeleteConfirm(
+                                    plan.id ||
+                                      plan._id ||
+                                      ""
+                                  )
+                                }
+                                title="Delete"
+                                className="p-1.5 rounded-lg hover:bg-error/10 text-error"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">
+                                  delete
+                                </span>
+                              </button>
+                                </>)}
+                            </>
+                          )}
+
+                          {plan.status === "completed" && (
+                            <span className="text-[11px] text-on-surface-variant/60 italic">
+                              Completed
+                            </span>
+                          )}
+
                         </div>
                       </td>
                     )}
@@ -434,7 +764,8 @@ export default function AuditPlanPage() {
           onClose={() => setScheduleTarget(null)}
           onSchedule={async (data) => {
             try {
-              await scheduleAudit(scheduleTarget.id, data);
+              const id = scheduleTarget.id || scheduleTarget._id || "";
+              await scheduleAudit(id, data);
 
               await loadAuditPlans();
 
@@ -444,6 +775,8 @@ export default function AuditPlanPage() {
             }
           }}
           auditors={auditors}
+          leadAuditors={auditors}
+          auditorDirectoryError={auditorDirectoryError}
         />
       )}
       {editTarget && (
@@ -455,10 +788,8 @@ export default function AuditPlanPage() {
               if (editTarget === "new") {
                 await createAuditPlan(data);
               } else {
-                await updateAuditPlan(
-                  (editTarget as AuditPlan).id,
-                  data
-                );
+                const target = editTarget as AuditPlan;
+                await updateAuditPlan(target.id || target._id || "", data);
               }
 
               await loadAuditPlans();
@@ -468,9 +799,9 @@ export default function AuditPlanPage() {
               console.error(err);
             }
           }}
-          auditors={auditors}
           coordinators={coordinatorNames}
-          onAddAuditor={addAuditor}
+          prakalpas={prakalpas}
+          masterLocations={masterLocations}
         />
       )}
       {deleteConfirm && (

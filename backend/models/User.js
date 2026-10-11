@@ -34,24 +34,26 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: [
+        "super_admin",
         "admin",
-        "lead_auditor",
         "audit_coordinator",
         "auditor",
         "prakalpa_manager",
       ],
     },
 
-    domain: {
+    prakalpa: {
       type: String,
       default: "",
       trim: true,
     },
 
-    assignedDomains: {
-    type: [String],
-    default: [],
+    assignedPrakalpas: {
+      type: [String],
+      default: [],
     },
+
+    passwordChangedAt: { type: Date, default: null },
 
     active: {
       type: Boolean,

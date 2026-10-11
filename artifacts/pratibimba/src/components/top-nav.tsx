@@ -1,6 +1,9 @@
 import { useLocation } from "wouter";
-import { useState } from "react";
-import { useApp, DEMO_USERS } from "../context/app-context";
+import { useEffect, useState } from "react";
+import { getReports } from "../services/reportService";
+import { getCoordinatorFindingSummaries } from "../services/auditFindingService";
+import { useApp } from "../context/app-context";
+import { isRoleAllowed } from "./role-route-guard";
 
 const breadcrumbMap: Record<string, string> = {
   "/dashboard":       "Dashboard",
@@ -10,35 +13,54 @@ const breadcrumbMap: Record<string, string> = {
   "/all-reports":     "All Reports",
   "/open-reports":    "Open Reports",
   "/iqa-summary":     "IQA Summary",
-  "/role-access":     "Role Access",
+  "/role-access":     "Roles & Permissions",
   "/user-management": "User Management",
+  "/prakalpa-management": "Prakalpa Management",
 };
 
 export const ROLE_LABELS: Record<string, string> = {
+  super_admin:       "Super Admin",
   admin:             "Admin",
-  lead_auditor:      "Lead Auditor",
   audit_coordinator: "Audit Coordinator",
   auditor:           "Auditor",
   prakalpa_manager:  "Manager",
 };
 
 const ROLE_BADGE: Record<string, string> = {
+  super_admin:       "bg-error/10 text-error",
   admin:             "bg-error/10 text-error",
-  lead_auditor:      "bg-primary/10 text-primary",
   audit_coordinator: "bg-tertiary/10 text-tertiary",
   auditor:           "bg-secondary/10 text-secondary",
   prakalpa_manager:  "bg-surface-container text-on-surface-variant",
 };
 
-const ROLE_GROUP_ORDER: string[] = ["admin", "lead_auditor", "audit_coordinator", "auditor", "prakalpa_manager"];
-
 export function TopNav() {
-  const [pathname] = useLocation();
-  const { currentUser, setCurrentUser, notifications, markNotificationRead, markAllNotificationsRead } = useApp();
+  const [pathname, setLocation] = useLocation();
+  const { currentUser, notifications, markNotificationRead, markAllNotificationsRead } = useApp();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const [pendingReview, setPendingReview] = useState({ findings: 0, actions: 0 });
+  useEffect(() => {
+    if (currentUser.role !== "audit_coordinator") { setPendingReview({ findings: 0, actions: 0 }); return; }
+    let active = true;
+    const refresh = async () => {
+      try {
+        const [summaries, reports] = await Promise.all([getCoordinatorFindingSummaries(), getReports()]);
+        if (active) setPendingReview({
+          findings: summaries.reduce((total, item) => total + (Number(item.awaitingReview) || 0), 0),
+          actions: (Array.isArray(reports) ? reports : []).filter((report: { workflowStatus?: string }) => report.workflowStatus === "action_submitted").length,
+        });
+      } catch { /* Do not show misleading stale pending counts on failure. */
+        if (active) setPendingReview({ findings: 0, actions: 0 });
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 60000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [currentUser.role, currentUser.name]);
+  const unreadCount = notifications.filter((n) => !n.read).length + pendingReview.findings + pendingReview.actions;
 
   const breadcrumbs = (() => {
     if (!pathname) return [];
@@ -54,16 +76,26 @@ export function TopNav() {
   })();
 
   const roleLabel = ROLE_LABELS[currentUser.role] ?? currentUser.role;
-  const roleBadge = ROLE_BADGE[currentUser.role] ?? "bg-surface-container text-on-surface-variant";
-
-  // Group demo users by role for display
-  const sortedDemoUsers = [...DEMO_USERS].sort(
-    (a, b) => ROLE_GROUP_ORDER.indexOf(a.role) - ROLE_GROUP_ORDER.indexOf(b.role)
-  );
 
   return (
-    <header className="sticky top-0 z-40 w-full h-16 bg-surface border-b border-outline-variant/20 flex justify-between items-center px-8">
-      <nav className="flex items-center font-label-md text-on-surface-variant">
+    <header className="sticky top-0 z-40 w-full min-h-16 bg-surface border-b border-outline-variant/20 flex justify-between items-center px-3 sm:px-4 md:px-8">
+      <div className="flex items-center min-w-0 gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setShowMobileMenu((s) => !s);
+            setShowNotifications(false);
+            setShowUserMenu(false);
+          }}
+          className="md:hidden shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-low transition-colors"
+          aria-label="Open navigation"
+        >
+          <span className="material-symbols-outlined text-[24px]">
+            {showMobileMenu ? "close" : "menu"}
+          </span>
+        </button>
+
+        <nav className="flex items-center min-w-0 font-label-md text-on-surface-variant overflow-hidden">
         {breadcrumbs.map((crumb, idx) => (
           <span key={crumb.href} className="flex items-center">
             {idx > 0 && <span className="material-symbols-outlined text-sm mx-1.5 text-on-surface-variant/40">chevron_right</span>}
@@ -74,13 +106,10 @@ export function TopNav() {
             )}
           </span>
         ))}
-      </nav>
+        </nav>
+      </div>
 
-      <div className="flex items-center gap-3">
-        <span className={`px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${roleBadge}`}>
-          {roleLabel}
-        </span>
-
+      <div className="flex items-center gap-1 sm:gap-2 md:gap-3 shrink-0">
         {/* Notification Bell */}
         <div className="relative">
           <button
@@ -98,7 +127,7 @@ export function TopNav() {
           {showNotifications && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
-              <div className="absolute right-0 top-full mt-2 w-96 bg-white rounded-xl shadow-floating border border-outline-variant/20 z-50 overflow-hidden">
+              <div className="fixed sm:absolute left-3 right-3 sm:left-auto sm:right-0 top-16 sm:top-full sm:mt-2 sm:w-96 bg-white rounded-xl shadow-floating border border-outline-variant/20 z-50 overflow-hidden">
                 <div className="px-4 py-3 border-b border-outline-variant/10 bg-surface-container-lowest flex justify-between items-center">
                   <p className="font-label-md text-on-surface font-bold">Notifications</p>
                   {unreadCount > 0 && (
@@ -107,7 +136,13 @@ export function TopNav() {
                     </button>
                   )}
                 </div>
-                {notifications.length === 0 ? (
+                {currentUser.role === "audit_coordinator" && (pendingReview.findings > 0 || pendingReview.actions > 0) && (
+                  <div className="p-3 space-y-2 border-b border-outline-variant/20">
+                    {pendingReview.findings > 0 && <button type="button" className="block w-full text-left rounded-lg bg-primary/5 px-3 py-2 hover:bg-primary/10" onClick={() => { setShowNotifications(false); setLocation("/scheduled-audits"); }}><span className="font-bold text-sm">{pendingReview.findings} Lead-approved findings</span><span className="block text-xs text-on-surface-variant">Awaiting Coordinator review · Open Scheduled Audits</span></button>}
+                    {pendingReview.actions > 0 && <button type="button" className="block w-full text-left rounded-lg bg-primary/5 px-3 py-2 hover:bg-primary/10" onClick={() => { setShowNotifications(false); setLocation("/all-reports"); }}><span className="font-bold text-sm">{pendingReview.actions} corrective actions</span><span className="block text-xs text-on-surface-variant">Awaiting Coordinator verification · Open All Reports</span></button>}
+                  </div>
+                )}
+                {notifications.length === 0 && pendingReview.findings === 0 && pendingReview.actions === 0 ? (
                   <div className="p-6 text-center text-on-surface-variant/50 font-body-md">No notifications</div>
                 ) : (
                   <div className="max-h-80 overflow-y-auto divide-y divide-outline-variant/10">
@@ -137,58 +172,86 @@ export function TopNav() {
           )}
         </div>
 
-        {/* User Switcher */}
-        <div className="relative">
-          <button
-            onClick={() => { setShowUserMenu((s) => !s); setShowNotifications(false); }}
-            className="flex items-center gap-2 hover:bg-surface-container-low px-3 py-1.5 rounded-lg transition-all"
-          >
-            <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-on-secondary font-bold text-[11px]">
-              {currentUser.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-            </div>
-            <div className="hidden lg:block text-left">
-              <p className="font-label-md font-bold text-on-surface leading-tight">{currentUser.name}</p>
-              <p className="text-[10px] text-on-surface-variant/60">Switch role</p>
-            </div>
-            <span className="material-symbols-outlined text-[16px] text-on-surface-variant/50">expand_more</span>
-          </button>
+        {/* Authenticated User Identity */}
+        <div className="flex items-center gap-1 sm:gap-2 px-1.5 sm:px-3 py-1.5 rounded-lg">
+          <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-on-secondary font-bold text-[11px]">
+            {currentUser.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+          </div>
 
-          {showUserMenu && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
-              <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-floating border border-outline-variant/20 z-50 overflow-hidden max-h-[80vh] overflow-y-auto">
-                <div className="px-4 py-3 border-b border-outline-variant/10 bg-surface-container-lowest sticky top-0">
-                  <p className="font-label-md text-on-surface-variant uppercase tracking-wider text-[11px]">Switch Demo User</p>
-                </div>
-                {sortedDemoUsers.map((user) => {
-                  const label = ROLE_LABELS[user.role] ?? user.role;
-                  const badge = ROLE_BADGE[user.role] ?? "bg-surface-container text-on-surface-variant";
-                  const isActive = currentUser.id === user.id;
-                  const sub = user.domain ?? "";
+          <div className="hidden lg:block text-left">
+            <p className="font-label-md font-bold text-on-surface leading-tight">
+              {currentUser.name}
+            </p>
+
+            <p className="text-[10px] text-on-surface-variant/60">
+              {roleLabel}
+            </p>
+          </div>
+
+
+        </div>
+      </div>
+
+      {showMobileMenu && (
+        <>
+          <button
+            type="button"
+            aria-label="Close navigation"
+            className="md:hidden fixed inset-0 top-16 bg-black/30 z-40"
+            onClick={() => setShowMobileMenu(false)}
+          />
+
+          <div className="md:hidden fixed left-0 right-0 top-16 z-50 bg-secondary shadow-xl border-t border-white/10 max-h-[calc(100vh-4rem)] overflow-y-auto">
+            <div className="p-3 space-y-1">
+              {[
+                { label: "Dashboard", href: "/dashboard", icon: "dashboard", roles: ["audit_coordinator", "auditor", "prakalpa_manager", "admin"] },
+                { label: "Audit Plan", href: "/audit-plan", icon: "event_note", roles: ["admin", "audit_coordinator"] },
+                { label: "Audit Calendar", href: "/audit-calendar", icon: "calendar_month", roles: ["audit_coordinator", "auditor", "admin"] },
+                { label: "Scheduled Audits", href: "/scheduled-audits", icon: "pending_actions", roles: ["audit_coordinator", "auditor", "admin"] },
+                { label: "My Findings", href: "/my-findings", icon: "assignment", roles: ["auditor"] },
+                { label: "Review Findings", href: "/lead-findings", icon: "assignment", roles: ["auditor"] },
+                { label: "All Reports", href: "/all-reports", icon: "fact_check", roles: ["audit_coordinator", "prakalpa_manager", "admin"] },
+                { label: "Open Reports", href: "/open-reports", icon: "inbox", roles: ["audit_coordinator", "prakalpa_manager", "auditor", "admin"] },
+                { label: "Checklist", href: "/checklist", icon: "checklist", roles: ["audit_coordinator", "auditor", "admin"] },
+                { label: "IQA Summary", href: "/iqa-summary", icon: "summarize", roles: ["audit_coordinator", "admin"] },
+                { label: "Prakalpa Management", href: "/prakalpa-management", icon: "account_tree", roles: ["super_admin"] },
+                { label: "User Management", href: "/user-management", icon: "manage_accounts", roles: ["super_admin"] },
+                { label: "Roles & Permissions", href: "/role-access", icon: "admin_panel_settings", roles: ["super_admin"] },
+              ]
+                .filter((item) => isRoleAllowed(currentUser?.role || "", item.roles))
+                .map((item) => {
+                  const active =
+                    pathname === item.href ||
+                    pathname?.startsWith(`${item.href}/`);
+
                   return (
                     <button
-                      key={user.id}
-                      onClick={() => { setCurrentUser(user); setShowUserMenu(false); }}
-                      className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-container-low transition-colors text-left ${isActive ? "bg-surface-container" : ""}`}
+                      type="button"
+                      key={item.href}
+                      onClick={() => {
+                        setShowMobileMenu(false);
+                        setLocation(item.href);
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors ${
+                        active
+                          ? "bg-white/20 text-on-secondary font-bold"
+                          : "text-on-secondary/80 hover:bg-white/10"
+                      }`}
                     >
-                      <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-on-secondary font-bold text-[11px] shrink-0">
-                        {user.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-label-md font-bold text-on-surface text-[12px]">{user.name}</p>
-                        {sub && <p className="text-[10px] text-on-surface-variant/70">{sub}</p>}
-                        <p className="text-[10px] text-on-surface-variant/50 truncate">{user.email}</p>
-                      </div>
-                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase shrink-0 ${badge}`}>{label}</span>
-                      {isActive && <span className="material-symbols-outlined text-primary text-[16px]">check</span>}
+                      <span className="material-symbols-outlined text-[20px]">
+                        {item.icon}
+                      </span>
+
+                      <span className="font-label-md text-[13px]">
+                        {item.label}
+                      </span>
                     </button>
                   );
                 })}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+            </div>
+          </div>
+        </>
+      )}
     </header>
   );
 }
